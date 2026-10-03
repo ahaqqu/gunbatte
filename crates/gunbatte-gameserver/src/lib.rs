@@ -292,7 +292,17 @@ fn push_observations(engine: &mut MatchEngine, entrants: &[MatchEntrant], stalls
         let obs = engine.observe(b as u32);
         let json = serde_json::to_string(&obs).unwrap_or_default();
         match h.out_tx.try_send(json) {
-            Ok(()) => stalls[b] = 0,
+            Ok(()) => {
+                if stalls[b] >= STALL_LIMIT {
+                    // The link caught up after a stall: take the entrant
+                    // back off the disconnect path. A slow moment must not
+                    // become a forfeit — only a link that stays choked for
+                    // the whole grace window does that.
+                    println!("obs_recovered entrant={}", h.name);
+                    engine.reconnect(b as u32);
+                }
+                stalls[b] = 0;
+            }
             Err(mpsc::error::TrySendError::Full(_)) => {
                 stalls[b] += 1;
                 if stalls[b] == STALL_LIMIT {

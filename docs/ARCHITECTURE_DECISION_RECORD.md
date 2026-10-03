@@ -45,16 +45,23 @@ the whys are the point, not the prose.
 5. **Graceful degradation over ejection.** Miss a 50 ms deadline and your
    last action repeats (momentum); miss too many and the timeout ladder
    forfeits you; stop reading observations and a disconnect grace counts
-   down; a half-open socket is reaped by keepalive pings. *Why:* a slow or
-   distant bot should play visibly worse — not vanish mid-match and ruin
-   it for everyone else. The reply stamp is enforced *windowed*
-   (`--input-window-ticks`, default 3): a reply stamped up to 3 ticks late
-   is still applied and only records its latency, so a long-haul human
+   down (and *recovers* the moment the link catches up); a half-open socket
+   is reaped by keepalive pings. *Why:* a slow or distant bot should play
+   visibly worse — not vanish mid-match and ruin it for everyone else. The
+   reply stamp is enforced *windowed*
+   (`--input-window-ticks`, default 10): a reply stamped up to 10 ticks
+   late is still applied and only records its latency, so a long-haul human
    (RTT ≫ 50 ms — the own network measures ~195 ms) plays laggy instead of
    frozen, while only a tick with no reply at all counts toward forfeit.
    The window is the latency-vs-integrity dial: it bounds the staleness of
    applied inputs and keeps #53's replay surface closed. *Corollary:* the
-   ladder forfeits the gone, not the distant.
+   ladder forfeits the gone, not the distant. *Sharpened after the
+   reliability incident (Oct 2026):* the chronic-slow forfeit was removed
+   entirely — latency is a network condition, not misconduct, and the
+   200 ms slow counter sat at the measured RTT of the box's own audience —
+   disconnect grace grew to 30 s, and a stalled observation stream
+   recovers instead of riding the grace to a forfeit. The full ordering
+   principle lives in AGENTS.md ("Reliability outranks policing").
 6. **Abuse resistance at the edges.** Every refusal the server can hand out
    is a deliberate ceiling (connection pool, lobby cap, new-name and
    wrong-code buckets, per-message size caps, name rules) so one client
@@ -199,9 +206,10 @@ database interface is the migration path.
   0..=1, aim targets clamped far outside the arena (±2^40) with a
   wide-typed delta at the shot site (#40) — hostile input degrades, never
   panics, and release determinism doesn't rest on wrapping accidents.
-- **The windowed reply stamp** (`--input-window-ticks`, default 3;
+- **The windowed reply stamp** (`--input-window-ticks`, default 10;
   strict-exact under #53, windowed after long-haul humans were provably
-  frozen by the 50 ms gate): a reply stamped more than the window older
+  frozen by the 50 ms gate, widened to ≈1 s of one-way latency by the
+  reliability doctrine): a reply stamped more than the window older
   than the tick being decided — or from the future — is dropped, so a held
   or replayed decision can neither apply nor displace fresher input, and
   the staleness of anything applied is bounded by the window. Acceptance
@@ -213,6 +221,10 @@ database interface is the migration path.
   the stream errors → the normal disconnect path.
 - **The token door + one-live-name** (#36, #42): no name hijack, no
   duplicate-draft double-attribution, no room confusion by name spoofing.
+  The one-live-name check *evicts* for the verified owner (correct token →
+  the newer connection wins; Oct 2026): the rule keeps two same-name
+  entrants out of one match without ever letting a hung socket hold a
+  name hostage.
 - **Origin allowlist** (#38): browsers always send `Origin` on WebSocket
   handshakes; a hostile page in another tab can't open sockets in a
   player's name. Non-browser clients send no Origin and are allowed.
@@ -252,8 +264,9 @@ log state changes and per-match aggregates only — `input_late_accepted`
 fires on an entrant's first windowed reply, `input_summary` closes each
 match per entrant — so a busy box stays greppable without 10 Hz flooding.
 The current catalog: `match_started`, `match_over`, `input_late_accepted`,
-`input_dropped_stale`, `input_summary`, `obs_stall`, `disconnect`,
-`ladder_forfeit`, `register_refused`, `lobby_join_failed`; phase-2 grace
+`input_dropped_stale`, `input_summary`, `obs_stall`, `obs_recovered`,
+`disconnect`, `ladder_forfeit`, `register_refused`, `register_evicted`,
+`lobby_join_failed`; phase-2 grace
 re-attach adds `reattach_granted` / `reattach_expired`. New operational
 behavior ships with its event in the same PR — this is the record ops
 reconfigures from (issue #71 holds the re-attach policy).

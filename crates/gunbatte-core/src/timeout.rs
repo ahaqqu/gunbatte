@@ -1,6 +1,7 @@
 //! Graceful degradation on bot timeouts (PLAN §4.3): momentum repeats keep
-//! matches watchable; graduated penalties retire chronically slow bots
-//! without punishing a GC pause.
+//! matches watchable, and graduated penalties retire a client that actually
+//! stopped answering — never one that is merely far away (reliability over
+//! policing: latency is a network condition, not misconduct).
 
 use serde::{Deserialize, Serialize};
 
@@ -51,10 +52,11 @@ impl TimeoutTracker {
                     self.stats.fatal_replies += 1;
                     self.stats.forfeit = Some("reply exceeded fatal deadline (1s)");
                 } else if ms > self.cfg.slow_ms {
+                    // Slow replies are counted, not punished (reliability
+                    // over policing): a distant client cannot help its
+                    // latency, and the miss ladder below is what retires a
+                    // client that actually stopped answering.
                     self.stats.slow_replies += 1;
-                    if self.stats.slow_replies >= self.cfg.max_slow_count {
-                        self.stats.forfeit = Some("chronically slow (too many >200ms replies)");
-                    }
                 }
             }
             None => {
@@ -81,11 +83,11 @@ impl TimeoutTracker {
     }
 
     /// Call each tick while disconnected. Returns a forfeit reason when the
-    /// grace window (10s = 100 ticks) expires.
+    /// grace window (`disconnect_grace_ticks`, 30s) expires.
     pub fn tick_disconnected(&mut self, tick: u64) -> Option<&'static str> {
         if let Some(since) = self.stats.disconnected_since_tick {
             if tick.saturating_sub(since) >= self.cfg.disconnect_grace_ticks {
-                let reason = "connection lost (10s grace expired)";
+                let reason = "connection lost (grace expired)";
                 self.stats.forfeit = Some(reason);
                 self.stats.disconnected_since_tick = None;
                 return Some(reason);
@@ -104,9 +106,8 @@ mod tests {
         TimeoutConfig {
             slow_ms: 200,
             fatal_ms: 1000,
-            max_slow_count: 30,
             max_missed_pct: 20,
-            disconnect_grace_ticks: 100,
+            disconnect_grace_ticks: 300,
         }
     }
 
@@ -114,7 +115,7 @@ mod tests {
     fn normal_gc_pause_never_forfeits() {
         let mut t = TimeoutTracker::new(cfg());
         for i in 0..10_000 {
-            // Occasional 300ms hiccup — under the 30 count.
+            // Occasional 300ms hiccup — slow, never fatal.
             if i % 1000 == 0 {
                 t.record(Some(300));
             } else {
@@ -132,12 +133,22 @@ mod tests {
     }
 
     #[test]
-    fn chronic_slowness_forfeits() {
+    fn chronic_slowness_is_a_stat_never_a_forfeit() {
         let mut t = TimeoutTracker::new(cfg());
-        for _ in 0..30 {
+        for _ in 0..1_000 {
             t.record(Some(250));
         }
-        assert!(t.stats.forfeit.is_some());
+        assert_eq!(t.stats.forfeit, None);
+        assert_eq!(t.stats.slow_replies, 1_000);
+    }
+
+    #[test]
+    fn a_faraway_client_that_keeps_replying_never_forfeits() {
+        let mut t = TimeoutTracker::new(cfg());
+        for _ in 0..10_000 {
+            t.record(Some(999)); // under the fatal deadline, way over slow_ms
+        }
+        assert_eq!(t.stats.forfeit, None);
     }
 
     #[test]
@@ -171,10 +182,10 @@ mod tests {
         let mut t = TimeoutTracker::new(cfg());
         assert_eq!(t.tick_disconnected(10), None);
         t.disconnect(10);
-        assert_eq!(t.tick_disconnected(50), None);
+        assert_eq!(t.tick_disconnected(250), None);
         assert_eq!(
-            t.tick_disconnected(110),
-            Some("connection lost (10s grace expired)")
+            t.tick_disconnected(310),
+            Some("connection lost (grace expired)")
         );
     }
 }

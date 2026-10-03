@@ -69,6 +69,9 @@ export interface PlayCallbacks {
   onLobbyClosed?: (reason: string) => void;
   /** Server-side rejection (bad code, full room, not the host…). */
   onError?: (message: string) => void;
+  /** The session hit a dead end (permanent refusal, eviction, or retries
+   * exhausted): the UI shows a card. `retryable` offers the reconnect button. */
+  onFatal?: (message: string, retryable: boolean) => void;
 }
 
 interface InputState {
@@ -120,6 +123,22 @@ export class PlayClient {
     this.mode = mode;
   }
 
+  /** Reconnection policy state (reliability over policing): a dropped
+   * socket retries itself with backoff — a blip on a slow link must not
+   * end a session. Permanent refusals and eviction never retry. */
+  private url: string | null = null;
+  private attempts = 0;
+  private leaveRequested = false;
+  /** A refusal the server will repeat verbatim (bad token, invalid name):
+   * retrying cannot succeed, so the card's way out is the truth instead. */
+  private noRetry = false;
+  /** This page was replaced by a newer connection for the same name:
+   * redialing would steal the name back and fight the other tab. */
+  private evicted = false;
+  private retryTimer: number | null = null;
+
+  private static MAX_ATTEMPTS = 6;
+
   /** This player's identity secret, persisted per name (issue #42). */
   private tokenKey(): string {
     return `gb.token.${this.name}`;
@@ -139,8 +158,59 @@ export class PlayClient {
   }
 
   connect(url: string): void {
+    this.url = url;
+    this.leaveRequested = false;
+    this.noRetry = false;
+    this.evicted = false;
+    this.attempts = 0;
+    this.open();
+  }
+
+  /** Manual retry from the error card: clears the backoff budget and dials
+   * again with the same identity (name + token → the server evicts any
+   * hung predecessor and admits us). */
+  reconnect(): void {
+    this.clearRetryTimer();
+    this.attempts = 0;
+    this.noRetry = false;
+    this.open();
+  }
+
+  private clearRetryTimer(): void {
+    if (this.retryTimer !== null) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.leaveRequested || this.noRetry || this.evicted || !this.url) {
+      this.setStatus("disconnected");
+      return;
+    }
+    if (this.attempts >= PlayClient.MAX_ATTEMPTS) {
+      this.setStatus("disconnected");
+      this.cb.onError?.("connection lost");
+      this.cb.onFatal?.("connection lost — the server is unreachable right now", true);
+      return;
+    }
+    this.attempts += 1;
+    const wait = Math.min(1500 * this.attempts, 6000);
+    this.setStatus("connecting", `reconnecting in ${Math.round(wait / 1000)}s…`);
+    this.clearRetryTimer();
+    this.retryTimer = window.setTimeout(() => this.open(), wait);
+  }
+
+  private open(): void {
+    if (!this.url) return;
     this.setStatus("connecting");
-    const ws = new WebSocket(url);
+    if (this.ws) {
+      // A manual retry while a socket still exists: detach its handlers so
+      // its close event cannot double-schedule a reconnect.
+      this.ws.onclose = null;
+      this.ws.close();
+    }
+    const ws = new WebSocket(this.url);
     this.ws = ws;
     ws.onopen = () => {
       // `human` marks this entrant for house-bot fill: the server tops the
@@ -176,6 +246,8 @@ export class PlayClient {
         return;
       }
       if (v.type === "registered") {
+        // The identity was accepted again: the retry budget is back to full.
+        this.attempts = 0;
         if (typeof v.token === "string" && v.token) {
           this.sessionToken = v.token;
           try {
@@ -216,8 +288,17 @@ export class PlayClient {
         this.setStatus("over");
         this.cb.onOver(v.place ?? 0, v.replay ?? null);
       } else if (v.type === "error") {
-        this.setStatus("queued", v.error);
-        this.cb.onError?.(v.error ?? "error");
+        const msg: string = v.error ?? "error";
+        if (msg === "bad token" || msg === "invalid name") {
+          this.noRetry = true;
+        } else if (msg.includes("newer connection")) {
+          this.evicted = true;
+        }
+        this.setStatus("queued", msg);
+        this.cb.onError?.(msg);
+        if (this.noRetry || this.evicted) {
+          this.cb.onFatal?.(msg, false);
+        }
       } else {
         // Observation.
         const obs = v as PlayObs;
@@ -228,7 +309,7 @@ export class PlayClient {
     };
     ws.onclose = () => {
       this.playing = false;
-      this.setStatus("disconnected");
+      this.scheduleReconnect();
     };
   }
 
@@ -345,6 +426,8 @@ export class PlayClient {
   }
 
   leave(): void {
+    this.leaveRequested = true;
+    this.clearRetryTimer();
     this.ws?.close();
     this.ws = null;
     this.playing = false;

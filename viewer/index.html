@@ -53,13 +53,15 @@
       <select id="cam-select"></select>
     </div>
 
-    <!-- live play HUD -->
+    <!-- live play HUD (debug only: ?debug=true) -->
     <div id="play-hud" class="hidden">
       <div id="play-status">connecting…</div>
       <div id="play-bars"></div>
       <div id="play-keys">WASD move · mouse aim · click fire · SPACE dash · SHIFT shield · Q sprint · F recall jalak · walk over a tin to grab its gun · jalak follows your cursor</div>
       <div id="play-replay"></div>
     </div>
+    <!-- minimal click-through status line for normal (non-debug) play -->
+    <div id="play-note"></div>
 
     <!-- combat feel overlays -->
     <div id="vignette"></div>
@@ -72,6 +74,7 @@
         <div id="play-over-title">ELIMINATED</div>
         <div id="play-over-sub">riding it out…</div>
         <div id="play-over-actions">
+          <button id="play-retry" class="hidden">RECONNECT</button>
           <button id="play-leave">LEAVE ARENA</button>
         </div>
       </div>

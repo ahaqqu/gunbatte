@@ -1480,6 +1480,79 @@ async fn issued_token_protects_ladder_identity() {
     );
 }
 
+/// Verified-owner eviction (reliability doctrine): while the old socket is
+/// STILL LIVE, the owner re-registering with the correct secret evicts it
+/// (latest connection wins) instead of being refused — a hung tab can never
+/// lock the owner out of their own name. The evicted socket gets a last
+/// error and is closed.
+#[tokio::test(flavor = "multi_thread")]
+async fn verified_owner_evicts_a_hung_connection() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = 8961;
+    let cfg = ServerConfig {
+        port,
+        bind: "127.0.0.1".to_string(),
+        db_path: dir.path().join("ladder.db"),
+        replay_dir: dir.path().join("replays"),
+        viewer_dir: None,
+        lanes: 1,
+        min_bots: 2,
+        house_bots: 0,
+        spectate_delay_s: 0,
+        ws_ping_every_s: 10,
+        ws_idle_timeout_s: 45,
+        max_connections: 256,
+        max_lobbies: 64,
+        join_attempts_per_min: 0,
+        new_names_per_min: 0,
+        max_replays: 100,
+    };
+    tokio::spawn(async move {
+        Server::start(cfg, MatchConfig::standard(), Arc::new(GameHost::new(3)))
+            .await
+            .expect("server");
+    });
+    wait_until_bound(port).await;
+    let url = format!("ws://127.0.0.1:{port}/ws/bot");
+
+    let (hung_tx, mut hung_rx) = connect_and_register(
+        &url,
+        json!({"type":"register","name":"evict-owner","decision_rate":1,"rated":true}),
+    )
+    .await;
+    let ack = reply_of_type(&mut hung_rx, Duration::from_secs(10), &["registered"]).await;
+    let secret = ack["token"].as_str().expect("issued token in ack").to_string();
+
+    // The owner dials again (new tab, same name + secret) while the old
+    // socket is still open: admitted, not refused.
+    let (_, mut fresh_rx) = connect_and_register(
+        &url,
+        json!({"type":"register","name":"evict-owner","decision_rate":1,"token":secret}),
+    )
+    .await;
+    let ack2 = reply_of_type(&mut fresh_rx, Duration::from_secs(10), &["registered"]).await;
+    assert_eq!(ack2["you"], "evict-owner", "owner takes over: {ack2}");
+
+    // The hung socket learns why it died, then actually dies.
+    let err = reply_of_type(&mut hung_rx, Duration::from_secs(10), &["error"]).await;
+    assert!(
+        err["error"].as_str().unwrap().contains("newer connection"),
+        "evicted socket told why: {err}"
+    );
+    let closed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match hung_rx.next().await {
+                // Stream end, transport error, or a Close frame — all dead.
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                Some(Ok(_)) => continue,
+            }
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "evicted socket closed: {closed:?}");
+    drop(hung_tx);
+}
+
 /// Casual tier (issue #42): a tokenless registration of a brand-new name is
 /// off-ladder and gets no secret; enrolling later puts the same identity on
 /// the ladder with a server-issued secret.

@@ -3,8 +3,10 @@
 GUNBATTE's server deliberately refuses things at the edges (issue #37: ladder
 integrity & abuse resistance). Every limit here was added so that one abusive
 client cannot farm the ladder, spam the database, brute-force private rooms,
-or exhaust the 2 vCPU / 4 GB VPS — at the cost of a few honest users hitting
-the ceiling in unusual situations.
+or exhaust the 2 vCPU / 4 GB VPS. The ordering principle (AGENTS.md,
+"Reliability outranks policing"): limits exist to protect the server's
+health, never to judge a player's network — latency, jitter, and dropped
+connections are conditions to ride out, not misbehavior to punish.
 
 This page is the troubleshooting map: **symptom → which limit fired → the fix.**
 All app limits are flags on `gunbatte-server serve` with defaults below; `0`
@@ -19,7 +21,7 @@ nginx limits are *per IP*.
 | `--join-attempts-per-min` | 30 | wrong room-code guesses (global allowance) |
 | `--new-names-per-min` | 60 | first-time bot registrations (global allowance) |
 | `--max-replays` | 100 | replay files kept (startup sweep) |
-| `--input-window-ticks` | 3 | reply-stamp acceptance window in ticks; 0 = strict (only the exact tick accepted) |
+| `--input-window-ticks` | 10 | reply-stamp acceptance window in ticks (≈1 s of one-way latency); 0 = strict (only the exact tick accepted) |
 | HTTP request timeout | 30 s | dynamic routes (replay downloads exempt) |
 | HTTP concurrency | 256 | in-flight requests of any kind |
 | nginx `limit_conn` | 10 / IP | concurrent WS connections per IP |
@@ -87,8 +89,9 @@ if you see this, something is creating rooms without ever starting them.
 ## "My bot plays sluggish / its decisions seem ignored"
 
 The server accepts a reply stamped with the tick currently being decided, or
-up to `--input-window-ticks` (default 3, ≈350 ms) ticks older — beyond that
-the reply is dropped (first drop per bot is logged: `input_dropped_stale`).
+up to `--input-window-ticks` (default 10, ≈1 s of one-way latency) ticks
+older — beyond that the reply is dropped (first drop per bot is logged:
+`input_dropped_stale`).
 A reply with **no tick field at all is accepted**. A late-but-in-window
 reply IS applied and only records its latency: the ladder forfeits the gone,
 not the distant — so sluggish play never comes from this gate.
@@ -102,6 +105,40 @@ not the distant — so sluggish play never comes from this gate.
 - Distant-but-honest links show up as `input_late_accepted` (first per
   entrant per match) and in the per-entrant `input_summary` at match end
   (`avg_staleness`, `avg_latency_ms`) — tuning evidence, not refusals.
+
+## "Why was a player forfeited?" — the timeout ladder
+
+The ladder retires a client that is actually gone or frozen — never one that
+is merely far away (slow replies are counted as a stat, `slow_replies`, and
+nothing else). Exactly three things forfeit:
+
+| Trigger | Threshold | Journal reason |
+|---|---|---|
+| a reply measured past the fatal deadline | > 1000 ms (first one) | `reply exceeded fatal deadline (1s)` |
+| missed decision ticks with nothing pending | > 20% and ≥ 10 misses | `missing too many deadlines (>20%)` |
+| disconnected for the whole grace | 30 s of momentum | `connection lost (grace expired)` |
+
+Reliability mechanics around it:
+
+- A stalled observation stream (channel backed up → `obs_stall`) disconnects
+  the entrant — and **recovers** (`obs_recovered`) the moment one observation
+  goes through again. A brief slow patch costs nothing.
+- Disconnection grace is 30 s (100 was too short to survive a wifi hop);
+  momentum keeps the body playing while it runs.
+- The viewer auto-reconnects with backoff after any drop; a reconnected
+  player is queued for the next match. (Re-entering the *same* live match
+  is a planned feature — see the rejoin issue.)
+
+## "This name is already connected" — it isn't anymore
+
+The one-connection-per-name rule (issue #42) stands for unproven
+registrations, but a registration presenting a tokened name's **correct
+token** is its owner: it evicts the old connection (`register_evicted`) and
+takes over — latest verified connection wins. A hung tab, a crashed page, or
+a half-open socket can never lock the owner out of their own name. Refusals
+that remain: a wrong or absent token on a claimed name (`bad token`), and a
+duplicate of a **tokenless casual** row (`already connected`) — a casual row
+has no secret, so first-come is all the protection it has.
 
 ## "An old replay link 404s"
 
@@ -158,11 +195,13 @@ aggregates, not per-tick lines.
 | `input_late_accepted entrant=X staleness=S latency_ms=L` | first windowed (late-but-applied) reply of that entrant |
 | `input_dropped_stale entrant=X client_tick=T current_tick=C` | first reply dropped as too stale for that entrant |
 | `obs_stall entrant=X` | stopped reading observations; disconnect grace begins |
+| `obs_recovered entrant=X` | observations flowing again after a stall; grace cancelled |
 | `disconnect entrant=X cause=socket_closed` | socket died; momentum, then forfeit |
 | `ladder_forfeit entrant=X bot=I tick=T reason=R` | timeout ladder forfeited the entrant |
 | `input_summary entrant=X accepted=N late=N avg_staleness=S avg_latency_ms=L max_staleness=M dropped_stale=D` | per-entrant input-path totals at match end |
 | `match_over ticks=T winner=W replay=R mode=M rated=B` | a match finished and persisted |
-| `register_refused name=X reason=invalid_name\|name_bucket\|bad_token\|already_connected` | registration refused at the door |
+| `register_refused name=X reason=invalid_name\|name_bucket\|bad_token` | registration refused at the door |
+| `register_evicted name=X (newer connection)` | the name's owner (correct token) replaced a live connection |
 | `lobby_join_failed name=X code=C reason=no_such_lobby\|join_bucket\|lobby_full` | private-room join refused |
 
 New operational behavior ships with its event and a LIMITS.md row in the

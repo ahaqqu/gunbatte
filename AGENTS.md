@@ -7,6 +7,36 @@ the internal architecture and its decision record live in
 this file covers the working rules and the internal boundary that keeps the
 project able to scale out.
 
+## Reliability outranks policing
+
+This is a game for humans on real networks: hotel wifi, mobile data, a
+laptop that drops off the wifi for ten seconds. Latency, jitter, and lost
+connections are normal playing conditions, not misbehavior. Every rule that
+can refuse, forfeit, or lock a player out is designed in that order: an
+honest player on a bad link must always be able to play — or get back in —
+even when the price is tolerating some abuse.
+
+Concretely:
+
+- Never punish a player for what the network does to them: distance
+  (latency), jitter, or a dropped socket. Forfeiture is for clients that are
+  truly gone or frozen, after generous grace — and every disconnect path
+  must recover the moment the link comes back.
+- Every refusal shows what happened and offers a way forward (a retry, a
+  reconnect, a new name). Nothing may render as a silent stuck state — a
+  player staring at "queued" forever is a bug, not a rule working.
+- Identity protects the player, not the rule: a hung old tab never locks an
+  owner out of their own name — the latest connection holding the correct
+  secret wins.
+- Anti-abuse throttles (buckets, caps, nginx limits) exist to protect the
+  server's health, are as generous as that goal allows, and are keyed on
+  what an abuser controls, never on what a distant honest player cannot.
+
+Review question for any PR that adds or tightens a limit: *what does an
+honest player on a slow, flaky link experience at this rule's worst case?*
+If the answer is kicked, locked out, or stuck, the design is wrong — relax
+the honest path and accept the minor abuse it permits.
+
 ## Ask the user through the harness question tool
 
 Decisions belong to the user. Whenever a question needs their answer — a
