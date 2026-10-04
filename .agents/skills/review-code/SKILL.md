@@ -1,5 +1,5 @@
 ---
-name: code-review
+name: review-code
 description: Security-expert deep review of a GitHub PR — bugs, regressions, vulnerabilities, code quality. Posts one inline review comment per finding plus a consolidated summary comment.
 ---
 
