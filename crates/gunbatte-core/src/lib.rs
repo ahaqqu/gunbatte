@@ -17,6 +17,7 @@ pub mod loot;
 pub mod map;
 pub mod observe;
 pub mod params;
+pub mod predict;
 pub mod replay;
 pub mod rng;
 pub mod state;

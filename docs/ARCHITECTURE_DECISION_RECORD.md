@@ -229,6 +229,23 @@ database interface is the migration path.
   and repeats the last move when a tick arrives empty (momentum fill),
   so the extra sends need no server change. Observation arrival remains
   a fast path for freshness.
+- **Your own units are predicted, not just extrapolated.** The play
+  client steps its own main and companion through `gunbatte-core`'s
+  movement oracle (`predict.rs`, exposed to the browser by the WASM
+  crate's `MoveSim`) every frame — the same velocity math, wall
+  resolution, leash, ability gates, and own-pair separation the server's
+  `step()` runs, proven bit-exact by the `predict_fidelity` test. A
+  keypress therefore moves you within one frame; each observation
+  reconciles the drift through the same blended correction the dead
+  reckoner uses. Fog is no obstacle: a unit's movement depends only on
+  its own input, the static map (embedded in the core, shared with the
+  server), and its own flags. The one blind spot is separation against
+  unseen enemies — the own main↔companion pair is predicted exactly; an
+  enemy's push is a misprediction the reconcile absorbs. Enemies (their
+  input is not ours to predict) keep plain velocity dead reckoning.
+- *Why not go further (rewind, higher tick rates):* still out of scope.
+  Prediction moved the feel problem client-side; the server's contract
+  (10 Hz, authoritative, replay-verified) is untouched.
 
 ## Security model — what each guard is for
 
