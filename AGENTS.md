@@ -56,12 +56,14 @@ then ask the decision.
 ## The task loop lives in skills, not here
 
 This file carries only what every role shares. The loop that turns a
-request into a merged, deployed change — grill → worktree → implement →
-PR → review code → resolve review code → merge & deploy → verify → clean
-up, split across three agents — is the `implement-with-grill` skill;
-`review-code` and `resolve-review-findings` own the review and
-finding-resolution stages. Load the skill for the stage you are running
-and follow it; every rule below applies no matter which stage that is.
+request into a merged, deployed change runs as three agent roles, each
+ending with a handoff that names the next stage: `implement-with-grill`
+grills, implements, and opens the PR, then hands it off; `review-code`
+posts the findings, then hands off the findings summary;
+`resolve-review-findings` dispositions every finding, hands off the
+resolution summary, and — on the user's go — merges, deploys, verifies
+live, and cleans up. Load the skill for the stage you are running and
+follow it; every rule below applies no matter which stage that is.
 
 ## The architecture docs are the map — update them in the same PR
 
