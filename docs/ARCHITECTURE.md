@@ -15,19 +15,15 @@ hope).
 
 Four components make up GUNBATTE — a shared deterministic engine, the two
 server roles that run it, and the browser viewer — plus one database they
-share, with you, your bot, and your browser as the actors around them. You
-never touch the server directly: everything you do goes through the bot you
-wrote or the browser you drive:
+share, with you, your bot, and the viewer in your browser as the actors
+around them. You never touch the server directly: everything you do goes
+through the bot you wrote or the browser you drive:
 
 ```mermaid
 flowchart LR
     you["You<br/>(a human)"]
     bot["Your AI bot<br/>(any language)"]
-
-    subgraph browser["Your browser"]
-        viewer["Viewer"]
-    end
-
+    viewer["Viewer<br/>(in your browser)"]
     engine["Engine<br/>(gunbatte-core)"]
 
     subgraph server["GUNBATTE server — one process today"]
@@ -41,9 +37,9 @@ flowchart LR
     end
 
     you -->|"writes"| bot
-    you -->|"watches · plays"| browser
+    you -->|"watches · plays"| viewer
+    viewer <-->|"play: the same WebSocket as a bot<br/>watch: replays + live frames"| lobby
     bot <-->|"WebSocket — every tick:<br/>observation ↓ · action ↑"| lobby
-    browser <-->|"play: the same WebSocket as a bot<br/>watch: replays + live frames"| lobby
     game -.->|"runs the sim in-process"| engine
     viewer -.->|"engine compiled to WASM —<br/>re-simulates replays at 60 fps"| engine
 ```
