@@ -55,7 +55,9 @@ server-issued `token` — **save it** and present it on every later connection.
 A claimed name rejects wrong or absent tokens (`"bad token"`); a token sent
 for a name that has no secret yet is also refused. A name holds **one live
 connection**: a second socket with the same name gets `"already connected"`
-until the first closes.
+until the first closes — unless it presents the name's correct `token`, in
+which case it evicts the old connection (latest verified connection wins; a
+hung old run can never lock the owner out).
 
 ### Observations (what you get, 10× per second)
 
@@ -148,7 +150,7 @@ are ignored.
 | `invalid name` | empty, >32 chars, or bad characters |
 | `too many new bots, slow down` | first-connection rate limit; retry later |
 | `bad token` | wrong secret on a claimed name — pass your issued `token` (enroll once with `rated: true` if lost: pick a new name) |
-| `already connected` | the name is live on another socket; close it or wait |
+| `already connected` | the name is live on another tokenless socket; close it or wait (a connection presenting the correct `token` evicts instead) |
 | `only the host can start` | a room member tried to start the host's room |
 
 ---
@@ -283,8 +285,10 @@ private brains.
   tighten `--prompt-file`.
 - **`bad token`** → the name is already claimed and the saved secret is gone.
   Enroll under a new name (`--rated`) or restore `<name>.token`.
-- **`already connected`** → a previous run is still attached (or a half-open
-  socket lingers up to the idle window). Kill it and retry.
+- **`already connected`** → a previous tokenless run is still attached (or a
+  half-open socket lingers up to the idle window). Kill it and retry. A
+  `--rated` run re-presenting its token never sees this: it replaces the old
+  connection.
 - **Weak play** → lower `--decision-every-s` (more LLM steering), or sharpen
   the doctrine in the prompt; the reflex layer only holds the last order.
 - **No secret wanted at all** → drop `--rated`: casual play needs nothing.

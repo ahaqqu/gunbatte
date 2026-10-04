@@ -279,7 +279,70 @@ pub struct Server {
     /// registration with an already-connected name is refused, closing the
     /// duplicate-draft ELO double-attribution and the same-name room
     /// confusion. Inserted after the door checks, removed at teardown.
-    live_names: std::sync::Mutex<std::collections::HashSet<String>>,
+    ///
+    /// Reliability amendment: a registration presenting a tokened name's
+    /// correct secret is its owner — it evicts the old connection (latest
+    /// wins) instead of being refused, so a hung tab or a vanished socket
+    /// can never lock the owner out of their own name. Tokenless casual
+    /// rows keep the strict refusal (no secret exists to prove ownership
+    /// with), and wrong tokens are refused exactly as before.
+    live_names:
+        std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<LiveSlot>>>,
+}
+
+/// One live connection's kill switch: its writer's output queue (for a
+/// last-word notice), its reader→writer closed flag (to break the writer,
+/// which releases the socket and runs the teardown), and the drafting
+/// eligibility flag shared with its handle (claim_live_name turns it off
+/// at eviction, synchronously, so no scheduler tick can draft both
+/// connections of one name). The slot arc doubles as the teardown's
+/// ownership proof: a teardown may only remove the map entry that is
+/// still its own, so an evicted connection dying late cannot erase its
+/// successor's registration.
+struct LiveSlot {
+    out: mpsc::Sender<String>,
+    close: tokio::sync::watch::Sender<bool>,
+    connected: Arc<AtomicBool>,
+}
+
+/// What claiming a name in the live-names map decided. Three outcomes:
+/// the name was free, a live predecessor with proven ownership was
+/// evicted, or a tokenless presentation was refused against a live
+/// casual duplicate.
+enum Claim {
+    Fresh,
+    Evicted(Arc<LiveSlot>),
+    Refused,
+}
+
+/// Claim `name` in the live-names map for a new connection (issue #42),
+/// atomic against rival registrations. Eviction eligibility is decided
+/// from the presentation, never a fresh DB read: the door has just
+/// verified it, and only a tokened row's door check can pass with a
+/// non-empty token — so a non-empty presentation proves ownership as of
+/// the door, and a tokenless one proves nothing against a live casual
+/// duplicate (strict refusal). The evicted predecessor is retired for
+/// drafting here, synchronously under the lock; notifying and closing it
+/// is the caller's job (the lock must not be held across those sends).
+fn claim_live_name(
+    live: &mut HashMap<String, Arc<LiveSlot>>,
+    name: &str,
+    presented_token: &str,
+    slot: Arc<LiveSlot>,
+) -> Claim {
+    match live.get(name) {
+        Some(existing) if !presented_token.is_empty() => {
+            existing.connected.store(false, Ordering::Relaxed);
+            let ev = existing.clone();
+            live.insert(name.to_string(), slot);
+            Claim::Evicted(ev)
+        }
+        Some(_) => Claim::Refused,
+        None => {
+            live.insert(name.to_string(), slot);
+            Claim::Fresh
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -426,7 +489,7 @@ impl Server {
             conn_permits: Arc::new(tokio::sync::Semaphore::new(permits)),
             join_bucket: std::sync::Mutex::new(TokenBucket::new(cfg.join_attempts_per_min)),
             new_name_bucket: std::sync::Mutex::new(TokenBucket::new(cfg.new_names_per_min)),
-            live_names: std::sync::Mutex::new(std::collections::HashSet::new()),
+            live_names: std::sync::Mutex::new(std::collections::HashMap::new()),
             cfg,
             db,
             config,
@@ -754,9 +817,14 @@ impl Server {
             .cloned()
             .collect();
         if !drafted.iter().any(|m| Arc::ptr_eq(m, host)) {
+            // Put the room back: a failed start must never strand the
+            // members outside the public queue (their lobby binding is
+            // what the scheduler filters on).
+            self.lobbies.lock().await.insert(code, lobby);
             return Err("host is disconnected".into());
         }
         if drafted.len() < 2 && self.cfg.house_bots == 0 {
+            self.lobbies.lock().await.insert(code, lobby);
             return Err("need at least 2 players".into());
         }
 
@@ -1101,18 +1169,55 @@ async fn on_bot_socket(
             .await;
         return;
     }
-    // One live connection per name (issue #42): a second concurrent socket
-    // with the same name is refused — two same-name entrants in one match
-    // would double-count the name's result. The atomic insert is the check;
-    // the name frees when this socket tears down.
-    if !server.live_names.lock().unwrap().insert(reg.name.clone()) {
-        println!("register_refused name={} reason=already_connected", reg.name);
-        let _ = ws_tx
-            .send(tmsg(
-                json!({"type":"error","error":"already connected"}).to_string(),
-            ))
-            .await;
-        return;
+    // One live connection per name (issue #42): two same-name entrants in
+    // one match would double-count the name's result. But a registration
+    // that got here with a token has just proved ownership at the door
+    // (verify_token passed, and only a tokened row has a token to pass) —
+    // a tokened name has an owner: it evicts the old connection (latest
+    // wins) instead of being refused, so a hung tab or a half-open socket
+    // can never lock the owner out of their own name. A tokenless
+    // presentation has no secret to prove, so it keeps the strict refusal
+    // — first-come is all the protection a disposable name has. The map
+    // insert is the check; the name frees when this socket tears down.
+    let (out_tx, mut out_rx) = mpsc::channel::<String>(64);
+    let (in_tx, in_rx) = mpsc::channel::<BotMsg>(64);
+    let connected = Arc::new(AtomicBool::new(true));
+    let (closed_tx, mut closed_rx) = tokio::sync::watch::channel(false);
+    let slot = Arc::new(LiveSlot {
+        out: out_tx.clone(),
+        close: closed_tx.clone(),
+        connected: connected.clone(),
+    });
+    // Decide under one lock (get + insert atomic against rival
+    // registrations); the notice goes out after the lock is released —
+    // and via try_send: a frozen predecessor's queue must never park this
+    // registration (R1), the evicted client still gets the Close frame.
+    let dup = claim_live_name(
+        &mut server.live_names.lock().unwrap(),
+        &reg.name,
+        &reg.token,
+        slot.clone(),
+    );
+    match dup {
+        Claim::Evicted(existing) => {
+            println!("register_evicted name={} (newer connection)", reg.name);
+            let _ = existing.out.try_send(
+                json!({"type":"error","error":"this name was just opened in a newer connection"})
+                    .to_string(),
+            );
+            let _ = existing.close.send(true);
+        }
+        Claim::Refused => {
+            // A live tokenless duplicate: the strict refusal stands.
+            println!("register_refused name={} reason=already_connected", reg.name);
+            let _ = ws_tx
+                .send(tmsg(
+                    json!({"type":"error","error":"already connected"}).to_string(),
+                ))
+                .await;
+            return;
+        }
+        Claim::Fresh => {}
     }
     // Tier and secret (issue #42): known names keep their row's tier — a
     // rated row enrolls even on a tokenless reconnect, which is how every
@@ -1129,9 +1234,6 @@ async fn on_bot_socket(
     let eff_token = issued.as_deref().unwrap_or(&reg.token);
     let db_id = server.db.register_bot(&reg.name, eff_token, rated).unwrap_or(0);
 
-    let (out_tx, mut out_rx) = mpsc::channel::<String>(64);
-    let (in_tx, in_rx) = mpsc::channel::<BotMsg>(64);
-    let connected = Arc::new(AtomicBool::new(true));
     let connected2 = connected.clone();
     let mode = if reg.mode.eq_ignore_ascii_case("boss") {
         GameMode::Boss
@@ -1191,8 +1293,9 @@ async fn on_bot_socket(
     // Keepalive: the writer pings on an interval and the reader closes the
     // socket after `ws_idle_timeout_s` of total silence, so a half-open TCP
     // connection (peer vanished without FIN) cannot linger forever. Any
-    // traffic — inputs or pongs — resets the clock.
-    let (closed_tx, mut closed_rx) = tokio::sync::watch::channel(false);
+    // traffic — inputs or pongs — resets the clock. The closed watch channel
+    // itself is created up at registration, where the eviction path shares
+    // it to break a replaced connection's writer.
     let idle_window = if server.cfg.ws_idle_timeout_s == 0 {
         KEEPALIVE_OFF
     } else {
@@ -1296,12 +1399,35 @@ async fn on_bot_socket(
                     break;
                 }
             }
-            _ = closed_rx.changed() => break,
+            _ = closed_rx.changed() => {
+                // Evicted (or the reader died): flush whatever is already
+                // queued before the socket drops — an evicted connection's
+                // last word ("replaced by a newer connection") must reach
+                // the wire, not lose the select! race against its own
+                // close signal.
+                while let Ok(text) = out_rx.try_recv() {
+                    let _ = ws_tx.send(tmsg(text)).await;
+                }
+                let _ = ws_tx.send(Message::Close(None)).await;
+                break;
+            }
         }
     }
     connected.store(false, Ordering::Relaxed);
     reader.abort();
-    server.live_names.lock().unwrap().remove(&handle.name);
+    // Free the name only if this connection still owns it: an evicted
+    // connection tears down after its successor registered, and its late
+    // cleanup must not erase the successor's slot.
+    {
+        let mut live = server.live_names.lock().unwrap();
+        if live
+            .get(&handle.name)
+            .map(|s| Arc::ptr_eq(s, &slot))
+            .unwrap_or(false)
+        {
+            live.remove(&handle.name);
+        }
+    }
     let code = handle.lobby_code();
     server.lobby.lock().await.retain(|h| !Arc::ptr_eq(h, &handle));
     // A disconnecting member leaves the room; an empty room (or the host
@@ -1382,6 +1508,61 @@ mod tests {
     use gunbatte_core::config::MatchConfig;
     use gunbatte_core::engine::MatchEngine;
     use proptest::prelude::*;
+
+    fn slot_with_flag() -> (Arc<LiveSlot>, Arc<AtomicBool>) {
+        let connected = Arc::new(AtomicBool::new(true));
+        let (out, _out_rx) = mpsc::channel::<String>(64);
+        let (close, _close_rx) = tokio::sync::watch::channel(false);
+        (
+            Arc::new(LiveSlot {
+                out,
+                close,
+                connected: connected.clone(),
+            }),
+            connected,
+        )
+    }
+
+    /// The live-name admission protocol (issue #42): eviction eligibility
+    /// comes from the presentation — a non-empty token proves ownership at
+    /// the door, a tokenless one proves nothing — and the evicted
+    /// predecessor is retired for drafting synchronously, so a scheduler
+    /// tick can never draft both connections of one name.
+    #[test]
+    fn claim_live_name_evicts_only_proven_owners_and_retires_the_predecessor() {
+        let mut live: HashMap<String, Arc<LiveSlot>> = HashMap::new();
+
+        // Free name: fresh claim — slot installed, drafting flag untouched.
+        let (holder, holder_connected) = slot_with_flag();
+        assert!(matches!(
+            claim_live_name(&mut live, "ada", "", holder.clone()),
+            Claim::Fresh
+        ));
+        assert!(holder_connected.load(Ordering::Relaxed));
+        assert!(Arc::ptr_eq(live.get("ada").unwrap(), &holder));
+
+        // Tokenless presentation over a live connection: strict refusal —
+        // the incumbent keeps the name and stays draft-eligible.
+        let (rival, rival_connected) = slot_with_flag();
+        assert!(matches!(
+            claim_live_name(&mut live, "ada", "", rival),
+            Claim::Refused
+        ));
+        assert!(rival_connected.load(Ordering::Relaxed));
+        assert!(Arc::ptr_eq(live.get("ada").unwrap(), &holder));
+
+        // Tokened presentation over a live connection: eviction — the map
+        // points at the successor, and the predecessor is retired for
+        // drafting (the flag the draft filters read) before the lock drops.
+        let (successor, successor_connected) = slot_with_flag();
+        match claim_live_name(&mut live, "ada", "secret", successor.clone()) {
+            Claim::Evicted(evicted) => assert!(Arc::ptr_eq(&evicted, &holder)),
+            _ => panic!("a tokened presentation must evict the incumbent"),
+        }
+        assert!(!holder_connected.load(Ordering::Relaxed));
+        assert!(successor_connected.load(Ordering::Relaxed));
+        assert!(Arc::ptr_eq(live.get("ada").unwrap(), &successor));
+    }
 
     /// Arbitrary JSON: scalars with extreme values, multibyte strings and
     /// keys, arrays and objects nested to a bounded depth — wrong types,

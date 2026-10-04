@@ -70,8 +70,10 @@ enum Cmd {
         /// Input acceptance window in ticks: replies stamped up to this many
         /// ticks older than the one being decided are still applied, so a
         /// long-haul human (RTT ≫ the 50ms deadline) stays playable. 0
-        /// restores the strict #53 gate. The default covers ~350ms of RTT.
-        #[arg(long, default_value_t = 3)]
+        /// restores the strict #53 gate. The default covers ~1s of one-way
+        /// latency — roughly 2s of round-trip — because reliability on a
+        /// slow link outranks strictness (AGENTS.md).
+        #[arg(long, default_value_t = 10)]
         input_window_ticks: u32,
     },
 }

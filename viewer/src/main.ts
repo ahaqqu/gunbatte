@@ -43,6 +43,12 @@ const picker = document.getElementById("picker")!;
 const replaysPage = document.getElementById("replays-page")!;
 const lobbyPage = document.getElementById("lobby-page")!;
 
+/** Debug HUD (?debug=true): the HP/energy/cooldowns panel exists for
+ * development and spectating internals. Normal play hides it — it covered
+ * the arena, blocked mouse aiming over it, and every value it shows the
+ * player needs is visible on the field itself. */
+const DEBUG_HUD = new URLSearchParams(location.search).get("debug") === "true";
+
 const stage = new Stage();
 const hud = new Hud();
 const timeline = new Timeline();
@@ -637,12 +643,16 @@ function updateReticle(): void {
   }
 }
 
-function playOverShow(crown: string, title: string, sub: string): void {
+const esc = (s: string): string =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function playOverShow(crown: string, title: string, sub: string, retryable = false): void {
   const card = document.querySelector("#play-over .crown")!;
   card.textContent = crown;
   document.getElementById("play-over-title")!.textContent = title;
   const subEl = document.getElementById("play-over-sub")!;
   subEl.innerHTML = sub;
+  document.getElementById("play-retry")!.classList.toggle("hidden", !retryable);
   document.getElementById("play-over")!.classList.remove("hidden");
 }
 
@@ -651,9 +661,16 @@ function playOverHide(): void {
 }
 
 function setPlayStatus(s: string, detail?: string): void {
-  const el = document.getElementById("play-status")!;
-  el.textContent = detail ? s + " — " + detail : s;
-  document.getElementById("play-hud")!.classList.remove("hidden");
+  const text = detail ? s + " — " + detail : s;
+  if (DEBUG_HUD) {
+    const el = document.getElementById("play-status")!;
+    el.textContent = text;
+    document.getElementById("play-hud")!.classList.remove("hidden");
+  } else {
+    // No panel in normal play: the status line lives on a click-through
+    // chip that can never sit under the mouse.
+    document.getElementById("play-note")!.textContent = text;
+  }
 }
 
 /** The one entry into a live match. `lobby` turns it into a private room:
@@ -718,16 +735,34 @@ async function startPlay(
     },
     onError: (msg) => {
       setLobbyNotice(msg, true);
-      // A "bad token" refusal is otherwise a dead end: the name is claimed
-      // and this browser holds no working secret for it (unwritable storage
-      // in private mode, or a secret that never belonged to this name). The
-      // server never re-issues one — the only way forward is another name,
-      // so surface the modal that carries the way back to the menu.
+    },
+    onFatal: (msg, retryable) => {
+      // A dead end the socket cannot talk its way out of. Every card names
+      // what happened and what the way out is — nothing renders as a
+      // silent "queued" forever.
       if (msg === "bad token") {
+        // A "bad token" refusal is otherwise a dead end: the name is claimed
+        // and this browser holds no working secret for it (unwritable storage
+        // in private mode, or a secret that never belonged to this name). The
+        // server never re-issues one — the only way forward is another name,
+        // so surface the modal that carries the way back to the menu.
         playOverShow(
           "🔒",
           "NAME PROTECTED",
           "this name is claimed and this browser can't prove it's you —<br>LEAVE ARENA, then pick another name",
+        );
+      } else if (msg.includes("newer connection")) {
+        playOverShow(
+          "🔁",
+          "OPENED ELSEWHERE",
+          "this name was just opened in a newer tab or window —<br>this page is no longer in control",
+        );
+      } else {
+        playOverShow(
+          "⚠",
+          "CONNECTION LOST",
+          `${esc(msg)}<br>a retry puts you straight back in the queue`,
+          retryable,
         );
       }
     },
@@ -783,6 +818,10 @@ async function startPlay(
   document.getElementById("play-leave")!.addEventListener("click", () => {
     playClient?.leave();
     location.href = location.pathname; // back to the home screen
+  });
+  document.getElementById("play-retry")!.addEventListener("click", () => {
+    playOverHide();
+    playClient?.reconnect();
   });
 
   if (lobby) {
@@ -851,7 +890,7 @@ function hideLobbyRoom(): void {
 function showMatchHud(): void {
   document.getElementById("topbar")!.classList.remove("hidden");
   document.getElementById("killfeed")!.classList.remove("hidden");
-  document.getElementById("play-hud")!.classList.remove("hidden");
+  if (DEBUG_HUD) document.getElementById("play-hud")!.classList.remove("hidden");
   reticle.classList.remove("hidden");
 }
 
@@ -1203,7 +1242,8 @@ function playLoop(ts: number): void {
     sfx.play("dash", pan, vol * 0.8);
   }
 
-  // HUD.
+  // HUD. The debug panel's bars exist only under ?debug=true; normal play
+  // skips the DOM churn entirely.
   hud.stats(obs.tick, obs.global.alive, zonePhaseOfFloat(obs.global.zone.radius), false);
   const gun = WEAPONS[weaponIdx(me.weapon)];
   const fireCd = me.cooldown.fire ?? 0;
@@ -1214,7 +1254,7 @@ function playLoop(ts: number): void {
   const comp = obs.you.companion.alive
     ? `<div class="pbar"><span>JALAK ${Math.round(obs.you.companion.hp)}</span><div><i style="width:${Math.max(0, obs.you.companion.hp / 30 * 100)}%;background:#35c1f0"></i></div></div>`
     : `<div class="pcd">jalak respawning ${obs.you.companion.respawn_in_s ? obs.you.companion.respawn_in_s.toFixed(0) + "s" : "…"}</div>`;
-  document.getElementById("play-bars")!.innerHTML = `
+  if (DEBUG_HUD) document.getElementById("play-bars")!.innerHTML = `
     <div class="pbar"><span>HP ${Math.round(me.hp)}</span><div><i style="width:${Math.max(0, me.hp)}%;background:${hpColor}"></i></div></div>
     <div class="pbar"><span>EN ${Math.round(me.energy)}</span><div><i style="width:${me.energy}%;background:#35c1f0"></i></div></div>
     ${comp}

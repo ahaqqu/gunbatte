@@ -293,15 +293,16 @@ impl Default for LootConfig {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct TimeoutConfig {
-    /// A reply slower than this (ms) counts against the chronic-slow budget.
+    /// A reply slower than this (ms) is counted as a slow reply — a stat
+    /// only, never a forfeit: distance is not misbehavior, and the fatal
+    /// deadline below already retires a client that truly froze.
     pub slow_ms: u64,
     /// A reply slower than this (ms) forfeits immediately.
     pub fatal_ms: u64,
-    /// Chronic-slow budget: this many slow replies forfeit.
-    pub max_slow_count: u64,
     /// Missing this fraction of deadlines (percent) forfeits.
     pub max_missed_pct: u64,
-    /// Ticks a bot may stay disconnected (momentum) before forfeit: 10s.
+    /// Ticks a bot may stay disconnected (momentum) before forfeit: 30s —
+    /// a dropped connection on a slow link should ride out the outage.
     pub disconnect_grace_ticks: u64,
 }
 
@@ -310,9 +311,8 @@ impl Default for TimeoutConfig {
         TimeoutConfig {
             slow_ms: 200,
             fatal_ms: 1000,
-            max_slow_count: 30,
             max_missed_pct: 20,
-            disconnect_grace_ticks: 100,
+            disconnect_grace_ticks: 300,
         }
     }
 }
