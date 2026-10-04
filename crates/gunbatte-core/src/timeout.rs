@@ -71,7 +71,8 @@ impl TimeoutTracker {
         }
     }
 
-    /// Connection dropped mid-match: 10s of momentum before forfeit.
+    /// Connection dropped mid-match: the disconnect grace (30s) of
+    /// momentum before forfeit.
     pub fn disconnect(&mut self, tick: u64) {
         if self.stats.disconnected_since_tick.is_none() {
             self.stats.disconnected_since_tick = Some(tick);

@@ -366,7 +366,8 @@ async fn drain_inputs(
                 }
                 Err(mpsc::error::TryRecvError::Empty) => break,
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    // Socket died: 10s of momentum, then forfeit (PLAN §4.3.4).
+                    // Socket died: the disconnect grace (30s) of momentum,
+                    // then forfeit (PLAN §4.3.4).
                     if !disconnected[b] {
                         disconnected[b] = true;
                         println!("disconnect entrant={} cause=socket_closed", h.name);

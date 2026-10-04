@@ -129,19 +129,6 @@ impl Db {
         .unwrap_or(false)
     }
 
-    /// Does this name hold a secret? A tokenless (casual) row has no owner
-    /// who could prove itself, so the matchmaker refuses same-name
-    /// duplicates for it; a tokened row's verified owner may evict a live
-    /// predecessor (latest connection wins).
-    pub fn has_token(&self, name: &str) -> bool {
-        let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT token FROM bots WHERE name=?1", [name], |r| {
-            r.get::<_, String>(0)
-        })
-        .map(|t| !t.is_empty())
-        .unwrap_or(false)
-    }
-
     /// Is this name in the registry at all? Read-only check so the
     /// matchmaker can rate-limit first-time registrations (issue #37)
     /// without conflating them with reconnects.

@@ -200,7 +200,7 @@ aggregates, not per-tick lines.
 | `ladder_forfeit entrant=X bot=I tick=T reason=R` | timeout ladder forfeited the entrant |
 | `input_summary entrant=X accepted=N late=N avg_staleness=S avg_latency_ms=L max_staleness=M dropped_stale=D` | per-entrant input-path totals at match end |
 | `match_over ticks=T winner=W replay=R mode=M rated=B` | a match finished and persisted |
-| `register_refused name=X reason=invalid_name\|name_bucket\|bad_token` | registration refused at the door |
+| `register_refused name=X reason=invalid_name\|name_bucket\|bad_token\|already_connected` | registration refused (door checks, or the live-duplicate rule) |
 | `register_evicted name=X (newer connection)` | the name's owner (correct token) replaced a live connection |
 | `lobby_join_failed name=X code=C reason=no_such_lobby\|join_bucket\|lobby_full` | private-room join refused |
 

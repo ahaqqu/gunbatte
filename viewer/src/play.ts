@@ -135,6 +135,10 @@ export class PlayClient {
   /** This page was replaced by a newer connection for the same name:
    * redialing would steal the name back and fight the other tab. */
   private evicted = false;
+  /** The last refusal the server sent on this session's sockets: when the
+   * retry budget runs out, the card reports that answer instead of guessing
+   * at reachability (a deterministic refusal is not "server unreachable"). */
+  private lastRefusal: string | null = null;
   private retryTimer: number | null = null;
 
   private static MAX_ATTEMPTS = 6;
@@ -162,6 +166,7 @@ export class PlayClient {
     this.leaveRequested = false;
     this.noRetry = false;
     this.evicted = false;
+    this.lastRefusal = null;
     this.attempts = 0;
     this.open();
   }
@@ -191,7 +196,12 @@ export class PlayClient {
     if (this.attempts >= PlayClient.MAX_ATTEMPTS) {
       this.setStatus("disconnected");
       this.cb.onError?.("connection lost");
-      this.cb.onFatal?.("connection lost — the server is unreachable right now", true);
+      this.cb.onFatal?.(
+        this.lastRefusal
+          ? `connection lost — the server kept answering: ${this.lastRefusal}`
+          : "connection lost — the server is unreachable right now",
+        true,
+      );
       return;
     }
     this.attempts += 1;
@@ -205,8 +215,13 @@ export class PlayClient {
     if (!this.url) return;
     this.setStatus("connecting");
     if (this.ws) {
-      // A manual retry while a socket still exists: detach its handlers so
-      // its close event cannot double-schedule a reconnect.
+      // A manual retry while a socket still exists: detach all of its
+      // handlers so its events can neither double-schedule a reconnect nor
+      // write into the new session's state — the detachment is by
+      // construction, not by current call-flow.
+      this.ws.onopen = null;
+      this.ws.onmessage = null;
+      this.ws.onerror = null;
       this.ws.onclose = null;
       this.ws.close();
     }
@@ -246,8 +261,11 @@ export class PlayClient {
         return;
       }
       if (v.type === "registered") {
-        // The identity was accepted again: the retry budget is back to full.
+        // The identity was accepted again: the retry budget is back to full
+        // and any earlier refusal is stale — a later outage must be judged
+        // on its own answers, not this session's history.
         this.attempts = 0;
+        this.lastRefusal = null;
         if (typeof v.token === "string" && v.token) {
           this.sessionToken = v.token;
           try {
@@ -289,6 +307,7 @@ export class PlayClient {
         this.cb.onOver(v.place ?? 0, v.replay ?? null);
       } else if (v.type === "error") {
         const msg: string = v.error ?? "error";
+        this.lastRefusal = msg;
         if (msg === "bad token" || msg === "invalid name") {
           this.noRetry = true;
         } else if (msg.includes("newer connection")) {
