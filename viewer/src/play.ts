@@ -299,6 +299,7 @@ export class PlayClient {
       } else if (v.type === "match_start") {
         this.playing = true;
         this.lobby = null;
+        this.startHeartbeat();
         this.setStatus("playing");
         this.cb.onStart(v.you_index ?? 0, v.bots ?? [], v.role === "boss" ? "boss" : "raider");
       } else if (v.type === "match_over") {
@@ -444,9 +445,40 @@ export class PlayClient {
     this.ws.send(JSON.stringify(msg));
   }
 
+  /** Input heartbeat (reliability over policing): input used to ride
+   * observation arrival alone, so a stalled link stalled input too — fewer
+   * observations meant fewer inputs, compounding exactly when the link was
+   * worst. This 50ms pulse keeps input flowing off the observation path;
+   * the server accepts slightly stale tick stamps (input window) and
+   * repeats the last move when a tick arrives empty (momentum fill), so an
+   * extra send can never hurt — worst case it re-sends what the player
+   * still holds. Latched one-shots (tap fire, dash) are consumed on first
+   * send, so a heartbeat right behind an observation send is a no-op. */
+  private heartbeat: number | null = null;
+
+  private startHeartbeat(): void {
+    if (this.heartbeat !== null) return;
+    this.heartbeat = window.setInterval(() => {
+      if (
+        this.playing && this.lastObs && this.ws &&
+        this.ws.readyState === WebSocket.OPEN
+      ) {
+        this.sendInput(this.lastObs);
+      }
+    }, 50);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeat !== null) {
+      clearInterval(this.heartbeat);
+      this.heartbeat = null;
+    }
+  }
+
   leave(): void {
     this.leaveRequested = true;
     this.clearRetryTimer();
+    this.stopHeartbeat();
     this.ws?.close();
     this.ws = null;
     this.playing = false;
