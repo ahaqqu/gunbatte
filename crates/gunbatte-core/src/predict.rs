@@ -288,9 +288,10 @@ mod tests {
     use crate::types::{BotInput, UnitInput};
 
     /// Drive a real engine and the oracle through the same input script —
-    /// run, dash mid-run, sprint, shield, companion follow + heel — and
-    /// require bit-exact agreement every tick. Any divergence here means
-    /// the client predicts a different world than the server simulates.
+    /// run, dash mid-run, sprint, shield, stand-still dash, companion
+    /// follow, heel near and far — and require bit-exact agreement every
+    /// tick. Any divergence here means the client predicts a different
+    /// world than the server simulates.
     #[test]
     fn predict_fidelity() {
         let config = MatchConfig::standard();
@@ -314,7 +315,7 @@ mod tests {
 
         // (main move, main action, comp move, comp action) per tick.
         let north = MoveInput { dir: 0, throttle: ONE };
-        let script: [(MoveInput, Option<UnitAction>, MoveInput, Option<UnitAction>); 23] = [
+        let script: [(MoveInput, Option<UnitAction>, MoveInput, Option<UnitAction>); 26] = [
             (north, None, MoveInput { dir: 45, throttle: ONE }, None),
             (north, None, MoveInput { dir: 45, throttle: ONE }, None),
             (MoveInput { dir: 90, throttle: ONE }, None, MoveInput::stop(), None),
@@ -338,14 +339,42 @@ mod tests {
             (MoveInput { dir: 135, throttle: fixed::from_f64(0.75) }, Some(UnitAction::Dash), MoveInput { dir: 90, throttle: ONE }, None),
             (MoveInput { dir: 135, throttle: ONE }, None, MoveInput { dir: 90, throttle: ONE }, None),
             (MoveInput::stop(), None, MoveInput::stop(), None),
+            // Two idle ticks so the earlier shield expires and the energy
+            // regens before the standing dash below — it must actually
+            // fire, not be refused on an empty clock.
+            (MoveInput::stop(), None, MoveInput::stop(), None),
+            (MoveInput::stop(), None, MoveInput::stop(), None),
+            // Standing dash: throttle 0, so the dash direction comes from
+            // facing alone (step.rs takes the same branch) — pinned so a
+            // movement change there cannot ship as browser misprediction.
+            (MoveInput::stop(), Some(UnitAction::Dash), MoveInput::stop(), None),
         ];
 
-        // The scripted ticks, then 4 ticks where the companion charges the
-        // standing main — the deterministic way to make the pair overlap and
-        // exercise unit separation bit-for-bit.
-        for t in 0..script.len() + 4 {
+        // Ticks past the script: the companion flees beyond the 100-unit
+        // heel threshold and heels — pinning heel's far override
+        // (return-to-main move at full throttle over a stop input) — then
+        // 4 ticks where the companion charges the standing main, the
+        // deterministic way to make the pair overlap and exercise unit
+        // separation bit-for-bit.
+        const FLEE_TICKS: usize = 10;
+        let flee_from = script.len();
+        let heel_tick = flee_from + FLEE_TICKS;
+        for t in 0..heel_tick + 1 + 4 {
             let (main_mv, main_action, comp_mv, comp_action) = if t < script.len() {
                 script[t]
+            } else if t < heel_tick {
+                // Flee: directly away from the live main position.
+                (
+                    MoveInput::stop(),
+                    None,
+                    MoveInput {
+                        dir: fixed::norm_deg(main.pos.bearing_to(comp.pos)),
+                        throttle: ONE,
+                    },
+                    None,
+                )
+            } else if t == heel_tick {
+                (MoveInput::stop(), None, MoveInput::stop(), Some(UnitAction::Heel))
             } else {
                 (
                     MoveInput::stop(),
@@ -425,6 +454,20 @@ mod tests {
                 "tick {} comp shielding",
                 t + 1
             );
+            // Pin the branches the script exists to exercise: the standing
+            // dash must actually clear its energy gate, and the far heel
+            // must drive the companion back despite its stop input.
+            if t + 1 == flee_from {
+                assert!(em.dashing > 0, "tick {} standing dash must fire", t + 1);
+            }
+            if t + 1 == heel_tick + 1 {
+                assert_ne!(
+                    ec.vel,
+                    Vec2::default(),
+                    "tick {} far heel must drive the companion back",
+                    t + 1
+                );
+            }
         }
     }
 }

@@ -16,6 +16,12 @@ import { MoveSim } from "../wasm/gunbatte_wasm.js";
 import { ensureWasm } from "../sim.js";
 import type { PlayClient, PlayObs } from "../play.js";
 
+/** How long an observation that disagrees with a locally started action is
+ * treated as predating the server's processing of the press: one
+ * observation cadence plus one round trip. A genuinely refused action is
+ * corrected by the first post-grace observation. */
+const PREDICT_GRACE_MS = 350;
+
 interface OwnState {
   /** MoveSim kind code: 0 main · 1 companion · 2 boss. */
   kind: 0 | 1 | 2;
@@ -47,6 +53,16 @@ export class OwnPredictor {
   private lastMainNew: { x: number; y: number } = { x: 0, y: 0 };
   private lastDashSeen = 0;
   private lastSprintSeen = 0;
+  /** Wallclock stamps of locally started/held actions. An observation
+   * generated before the server processed the press carries no action
+   * status — without a grace window it would cancel the predicted clock a
+   * third of the way in, and the confirming observation would then restart
+   * it at full length. Reconciliation of "not dashing/shielding/sprinting"
+   * therefore waits one obs cadence + one RTT (~350 ms); a genuinely
+   * refused action is corrected by the first post-grace observation. */
+  private dashPredictedAt = 0;
+  private shieldPredictedAt = 0;
+  private sprintPredictedAt = 0;
   /** Frame context, set by beginFrame before the drivers run. */
   private obs: PlayObs | null = null;
   private client: PlayClient | null = null;
@@ -64,6 +80,9 @@ export class OwnPredictor {
     this.mainView = null;
     this.compView = null;
     this.pendingMainPush = [0, 0];
+    this.dashPredictedAt = 0;
+    this.shieldPredictedAt = 0;
+    this.sprintPredictedAt = 0;
     // The syncObs that follows match start may run before the WASM lands;
     // it records kind/energy and the drivers no-op until the oracle exists.
     ensureWasm()
@@ -86,12 +105,19 @@ export class OwnPredictor {
     this.compView = null;
     this.obs = null;
     this.client = null;
+    this.dashPredictedAt = 0;
+    this.shieldPredictedAt = 0;
+    this.sprintPredictedAt = 0;
   }
 
   /** Fold a fresh observation in (called once per new server snapshot):
-   * energy and action flags are server truth; dash/shield clocks stay local
-   * (they were started locally and run a known duration), except a dash the
-   * server reports that we never predicted (resync after a stall). */
+   * energy is server truth; dash/shield clocks stay local (they were
+   * started locally and run a known duration), except a dash the server
+   * reports that we never predicted (resync after a stall). Disagreeing
+   * action flags reconcile only after `PREDICT_GRACE_MS`: the first
+   * observation after a locally started action was generated before the
+   * server processed it, and cancelling on it would stutter the very
+   * movement this predictor exists to make crisp. */
   syncObs(obs: PlayObs, role: "boss" | "raider"): void {
     const me = obs.you.main;
     if (!this.main) {
@@ -108,7 +134,11 @@ export class OwnPredictor {
     const wasAlive = this.main.alive;
     this.main.alive = me.alive;
     this.main.energy = me.energy;
-    this.main.sprint = !!me.status?.includes("sprint");
+    const obsSprint = !!me.status?.includes("sprint");
+    if (obsSprint !== this.main.sprint &&
+        performance.now() - this.sprintPredictedAt > PREDICT_GRACE_MS) {
+      this.main.sprint = obsSprint;
+    }
     if (!wasAlive && me.alive) {
       // Respawning: a fresh unit — clear every local clock.
       this.main.dashing = 0;
@@ -121,13 +151,17 @@ export class OwnPredictor {
       const n = Math.hypot(v[0], v[1]) || 1;
       this.main.dashDir = [v[0] / n, v[1] / n];
     }
-    if (!me.status?.includes("shielding") && this.main.shielding > 0) {
-      // The server's shield ended (or never started): trust the server.
+    if (!me.status?.includes("shielding") && this.main.shielding > 0 &&
+        performance.now() - this.shieldPredictedAt > PREDICT_GRACE_MS) {
+      // The server's shield ended (or never started): trust the server —
+      // past the grace window that absorbs in-flight observations.
       this.main.shielding = 0;
     }
-    if (!me.status?.includes("dashing") && this.main.dashing > 0) {
-      // Same for dashes — the observation is the authority on state that we
-      // could only guess at; our local clock merely bridges between obs.
+    if (!me.status?.includes("dashing") && this.main.dashing > 0 &&
+        performance.now() - this.dashPredictedAt > PREDICT_GRACE_MS) {
+      // Same for dashes — past the grace window, the observation is the
+      // authority on state that we could only guess at; our local clock
+      // merely bridges between obs.
       this.main.dashing = 0;
     }
 
@@ -244,14 +278,21 @@ export class OwnPredictor {
     if (!this.client || !this.main) return 0;
     if (this.client.dashRequestedAt !== this.lastDashSeen) {
       this.lastDashSeen = this.client.dashRequestedAt;
+      this.dashPredictedAt = performance.now();
       return 1;
     }
     if (this.client.sprintToggledAt !== this.lastSprintSeen) {
       this.lastSprintSeen = this.client.sprintToggledAt;
       this.main.sprint = !this.main.sprint;
+      this.sprintPredictedAt = performance.now();
       return this.main.sprint ? 3 : 4;
     }
-    if (this.client.shieldHeld()) return 2;
+    if (this.client.shieldHeld()) {
+      // Held: the stamp refreshes every frame, so the reconcile stays
+      // suppressed for as long as we keep predicting the shield.
+      this.shieldPredictedAt = performance.now();
+      return 2;
+    }
     return 0;
   }
 }
