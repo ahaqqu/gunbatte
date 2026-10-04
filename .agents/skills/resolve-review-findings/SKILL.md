@@ -62,5 +62,7 @@ commit, and the PR ends green.
 - If the implementation branch has no open PR yet, create one before
   starting the loop: dispositions and the resolution report are PR
   artifacts.
-- Do not merge. Merging is the user's call; the loop ends at a green,
-  merge-ready PR.
+- Do not merge inside this loop; the loop ends at a green, merge-ready PR.
+  Merge & deploy, live verification, and worktree cleanup are the stages
+  that follow in the same run (the AGENTS.md workflow), taken up after this
+  skill completes.
