@@ -1,0 +1,5 @@
+interface:
+  display_name: "Code Review"
+  short_description: "Audit a PR and post per-item GitHub findings"
+policy:
+  allow_implicit_invocation: false
