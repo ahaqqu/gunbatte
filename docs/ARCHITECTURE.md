@@ -11,16 +11,32 @@ in the [architecture decision record](ARCHITECTURE_DECISION_RECORD.md).
 updates this document in the same PR (AGENTS.md makes this a rule, not a
 hope).
 
-## The three participants
+## The components
+
+Four components make up GUNBATTE — a shared deterministic engine, the two
+server roles that run it, and the browser viewer — with your bot and your
+browser as the actors on either end:
 
 ```mermaid
 flowchart LR
     bot["Your AI bot<br/>(any language)"]
-    browser["Your browser<br/>(watch · play)"]
-    server["GUNBATTE server"]
 
-    bot <-->|"WebSocket — every tick:<br/>observation ↓ · action ↑"| server
-    browser <-->|"play: the same bot protocol<br/>watch: replays + live frames"| server
+    subgraph browser["Your browser"]
+        viewer["Viewer<br/>TypeScript · PixiJS · Vite"]
+    end
+
+    engine["Engine (gunbatte-core)<br/>pure Rust · fixed-point math"]
+
+    subgraph server["GUNBATTE server — one process today"]
+        lobby["Lobby (matchmaker)<br/>Rust · axum (WebSocket) · SQLite"]
+        game["Game server<br/>Rust · tokio · 10 Hz match loop"]
+        lobby -->|"hands over the roster<br/>gets back results + replays"| game
+    end
+
+    bot <-->|"WebSocket — every tick:<br/>observation ↓ · action ↑"| lobby
+    browser <-->|"play: the same bot protocol<br/>watch: replays + live frames"| lobby
+    game -.->|"runs the sim in-process"| engine
+    viewer -.->|"engine compiled to WASM —<br/>re-simulates replays at 60 fps"| engine
 ```
 
 **Bots and browsers never talk to each other directly.** The server is the
