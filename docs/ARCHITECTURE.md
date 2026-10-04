@@ -41,7 +41,7 @@ flowchart LR
     viewer <-->|"play: the same WebSocket as a bot<br/>watch: replays + live frames"| lobby
     bot <-->|"WebSocket — every tick:<br/>observation ↓ · action ↑"| lobby
     game -.->|"runs the sim in-process"| engine
-    viewer -.->|"engine compiled to WASM —<br/>re-simulates replays at 60 fps"| engine
+    viewer -.->|"engine compiled to WASM —<br/>re-simulates replays at 60 fps,<br/>predicts your own movement live"| engine
 ```
 
 **The technology behind each component:**
@@ -52,7 +52,7 @@ flowchart LR
 | Lobby (matchmaker) | Rust · axum (WebSocket) | owns the WebSocket and registration, the queue, private lobbies, the ladder page |
 | Game server | Rust · tokio | runs matches: the 10 Hz tick loop, fog of war, replay recording |
 | Database | SQLite | identities, standings, replay listing — the only state both server roles touch |
-| Viewer | TypeScript · PixiJS · Vite | the browser app; re-simulates replays bit for bit at 60 fps |
+| Viewer | TypeScript · PixiJS · Vite | the browser app; re-simulates replays bit for bit at 60 fps, predicts your own units live through the same engine |
 
 **Bots and browsers never talk to each other directly.** The server is the
 only meeting point: everything either side learns about the other passes

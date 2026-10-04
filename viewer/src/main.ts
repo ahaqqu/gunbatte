@@ -15,6 +15,7 @@ import { Stage } from "./render/stage.js";
 import { drawArena } from "./render/arena.js";
 import { UnitViews } from "./render/units.js";
 import { DeadReckoner } from "./render/deadreckon.js";
+import { OwnPredictor } from "./render/predict.js";
 import { Fx } from "./render/fx.js";
 import { PickupLayer, ProjectileLayer, ZoneLayerView } from "./render/world.js";
 import { FogView } from "./render/fog.js";
@@ -580,6 +581,10 @@ let playProjObsTs = 0;
 // motion is smooth between the 10Hz observations.
 const playDr = new DeadReckoner();
 let playUnitTick = -1;
+// Own-unit prediction (render/predict.ts): the own main and companion are
+// driven through the WASM movement oracle every frame; enemies keep the
+// velocity dead reckoning above.
+const playPredictor = new OwnPredictor();
 let playEntrants: string[] = [];
 let playYouIndex = 0;
 // Combat-feel state: diffs between the last two observations drive the
@@ -779,11 +784,13 @@ async function startPlay(
       playUnits = new UnitViews(stage, realNames);
       showMatchHud();
       if (lobby) hideLobbyRoom();
-      // Dead-reckoner state is keyed by unit id, and ids are reused across
-      // matches: a new match must not inherit the previous one's anchors
-      // and pending corrections (worse if youIndex shifted, which can
-      // anchor a stale state to a different unit's id).
+      // Fresh prediction state for the new match: the oracle builds on the
+      // same embedded map the server sims, and the dead reckoner hands the
+      // own units' between-snapshot motion to it.
       playDr.reset();
+      playPredictor.onMatchStart(playClient?.mapId ?? "arena-1", role);
+      playDr.drive(1 + youIndex, playPredictor.driveMain);
+      if (role !== "boss") playDr.drive(101 + youIndex, playPredictor.driveComp);
       // The room's own mode wins: an invite code can be pasted into a link
       // whose ?mode disagrees (a royale link with a raid room's code).
       const header =
@@ -813,6 +820,7 @@ async function startPlay(
       }
     },
     onOver: (place, replayUrl) => {
+      playPredictor.reset();
       setPlayStatus("match over — place " + place);
       const watch = replayUrl
         ? `<a href='${replayUrl}' target='_blank'>▶ watch the replay</a> · `
@@ -1015,7 +1023,9 @@ function playLoop(ts: number): void {
   const me = obs.you.main;
   const names = playEntrants.map((n, i) => (i === playYouIndex ? n + " (YOU)" : n));
 
-  // Fold each fresh snapshot into the dead reckoner once per observation.
+  // Fold each fresh snapshot into the dead reckoner once per observation,
+  // and into the own-unit predictor (server truth for energy and action
+  // flags).
   if (obs.tick !== playUnitTick) {
     playUnitTick = obs.tick;
     const drUnits: { id: number; pos: [number, number]; vel?: [number, number] }[] = [
@@ -1029,7 +1039,10 @@ function playLoop(ts: number): void {
     }
     for (const c of obs.seen.companions) drUnits.push({ id: 100000 + c.id, pos: c.pos });
     playDr.observe(drUnits, ts);
+    playPredictor.syncObs(obs, playClient.role);
   }
+  // Per-frame context for the prediction drivers (input state, observation).
+  playPredictor.beginFrame(obs, playClient);
   // One advance per unit per frame, reused by every consumer (sprites, fog,
   // camera, FX placement) — a second call would integrate the state twice.
   const drPos = new Map<number, [number, number]>();
@@ -1055,13 +1068,21 @@ function playLoop(ts: number): void {
     units[o + 9] = (u.alive ? 1 : 0) | (u.status?.includes("sprint") ? 2 : 0) | (u.status?.includes("dashing") ? 4 : 0) | (u.status?.includes("shielding") ? 8 : 0);
     units[o + 10] = u.maxhp;
   };
+  // The own units' walk cycle and facing ride the predicted motion (falls
+  // back to the observation when the oracle has not loaded yet); enemies
+  // ride their reported velocity.
+  const mainView = playPredictor.mainView;
   setUnit(playYouIndex * 2, 1 + playYouIndex, playYouIndex, 0, {
-    pos: mePos, vel: me.vel, facing: me.facing, hp: me.hp,
+    pos: mePos, vel: mainView?.vel ?? me.vel, facing: mainView?.facing ?? me.facing, hp: me.hp,
     alive: me.alive, status: me.status, maxhp: 100,
   });
   if (obs.you.companion.pos && obs.you.companion.alive) {
+    const compPos = drPosOf(101 + playYouIndex, obs.you.companion.pos);
+    const compView = playPredictor.compView;
     setUnit(playYouIndex * 2 + 1, 101 + playYouIndex, playYouIndex, 1, {
-      pos: drPosOf(101 + playYouIndex, obs.you.companion.pos), vel: obs.you.companion.vel, facing: obs.you.companion.facing,
+      pos: compPos,
+      vel: compView?.vel ?? obs.you.companion.vel,
+      facing: compView?.facing ?? obs.you.companion.facing,
       hp: obs.you.companion.hp, alive: true, maxhp: 30,
     });
   }

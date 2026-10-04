@@ -112,6 +112,15 @@ export class PlayClient {
   mode: "royale" | "boss" = "royale";
   /** This socket's room, while it waits in one. */
   lobby: LobbyInfo | null = null;
+  /** The running match's map and this socket's role (match_start): the
+   * prediction oracle builds itself on the same embedded map the server
+   * sims. */
+  mapId = "arena-1";
+  role: "boss" | "raider" = "raider";
+  /** Wallclock of the last dash / sprint keypress (prediction reads the
+   * edges the same tick they happen; the wire send keeps its own latches). */
+  dashRequestedAt = 0;
+  sprintToggledAt = 0;
 
   constructor(
     private name: string,
@@ -305,6 +314,8 @@ export class PlayClient {
         // the dash/fire latches with it.
         this.lastObs = null;
         this.startHeartbeat();
+        this.mapId = typeof v.map_id === "string" && v.map_id ? v.map_id : "arena-1";
+        this.role = v.role === "boss" ? "boss" : "raider";
         this.setStatus("playing");
         this.cb.onStart(v.you_index ?? 0, v.bots ?? [], v.role === "boss" ? "boss" : "raider");
       } else if (v.type === "match_over") {
@@ -352,8 +363,14 @@ export class PlayClient {
     window.addEventListener("keydown", (e) => {
       const k = e.key.toLowerCase();
       if (k === " ") e.preventDefault();
-      if (k === " " && !this.state.keys.has(" ")) this.state.dashQueued = true;
-      if (k === "q" && !this.state.keys.has("q")) this.state.sprintToggled = true;
+      if (k === " " && !this.state.keys.has(" ")) {
+        this.state.dashQueued = true;
+        this.dashRequestedAt = performance.now();
+      }
+      if (k === "q" && !this.state.keys.has("q")) {
+        this.state.sprintToggled = true;
+        this.sprintToggledAt = performance.now();
+      }
       this.state.keys.add(k);
     });
     window.addEventListener("keyup", (e) => this.state.keys.delete(e.key.toLowerCase()));
@@ -410,6 +427,21 @@ export class PlayClient {
     if (d < 26) return { mv: { dir: 0, throttle: 0 } };
     const dir = ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
     return { mv: { dir: Math.round(dir) % 360, throttle: Math.min(1, d / 90) } };  }
+
+  /** Per-frame input views for the prediction oracle: the same sources the
+   * wire send samples, read without consuming its one-shot latches. */
+  mainMoveInput(): { dir: number; throttle: number } | null {
+    return this.moveDir();
+  }
+  companionMoveInput(obs: PlayObs): { dir: number; throttle: number } {
+    return this.companionInput(obs).mv;
+  }
+  companionHeel(obs: PlayObs): boolean {
+    return this.companionInput(obs).action?.type === "heel";
+  }
+  shieldHeld(): boolean {
+    return this.state.keys.has("shift");
+  }
 
   private sendInput(obs: PlayObs): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;

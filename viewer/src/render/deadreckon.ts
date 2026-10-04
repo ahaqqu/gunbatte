@@ -37,11 +37,27 @@ interface DRState {
 
 export class DeadReckoner {
   private s = new Map<number, DRState>();
+  /** Per-unit drivers: given the unit's current render position and the
+   * frame dt, return the displacement to integrate this frame. A driver
+   * takes over a unit's between-snapshot motion entirely (client-side
+   * prediction) and is exempt from the stall cap — prediction is local and
+   * keeps working when snapshots stop. Units without a driver dead-reckon
+   * along their last reported velocity, capped. */
+  private drivers = new Map<number, (st: { x: number; y: number }, dt: number) => [number, number]>();
 
-  /** Drop all per-unit state: unit ids are reused across matches, so a new
-   * match must not inherit the previous one's anchors and corrections. */
+  /** Hand a unit's motion to a prediction driver (null reverts to velocity
+   * dead reckoning). */
+  drive(id: number, fn: ((st: { x: number; y: number }, dt: number) => [number, number]) | null): void {
+    if (fn) this.drivers.set(id, fn);
+    else this.drivers.delete(id);
+  }
+
+  /** Forget everything (new match): positions, corrections, drivers. Unit
+   * ids are reused across matches, so a new match must not inherit the
+   * previous one's anchors and corrections. */
   reset(): void {
     this.s.clear();
+    this.drivers.clear();
   }
 
   /** Fold a fresh snapshot in for every unit the client can currently see:
@@ -92,14 +108,27 @@ export class DeadReckoner {
   pos(id: number, raw: [number, number], nowMs: number, dt: number): [number, number] {
     const st = this.s.get(id);
     if (!st) return raw;
-    // Keep guessing along the last reported velocity, but only while the
-    // server is still answering — past the cap a stalled link must not send
-    // sprites flying.
-    const ageS = (nowMs - st.anchoredAt) / 1000;
-    const moving = ageS <= CAP_S;
     const b = Math.min(1, dt / BLEND_S);
-    st.x += (moving ? st.vx * dt : 0) + st.ex * b;
-    st.y += (moving ? st.vy * dt : 0) + st.ey * b;
+    const driver = this.drivers.get(id);
+    let sx: number;
+    let sy: number;
+    if (driver) {
+      // Prediction drives this unit: it integrates whatever motion it
+      // computes from local input, and never freezes on a stalled link.
+      const d = driver(st, dt);
+      sx = d[0];
+      sy = d[1];
+    } else {
+      // Keep guessing along the last reported velocity, but only while the
+      // server is still answering — past the cap a stalled link must not
+      // send sprites flying.
+      const ageS = (nowMs - st.anchoredAt) / 1000;
+      const moving = ageS <= CAP_S;
+      sx = moving ? st.vx * dt : 0;
+      sy = moving ? st.vy * dt : 0;
+    }
+    st.x += sx + st.ex * b;
+    st.y += sy + st.ey * b;
     st.ex -= st.ex * b;
     st.ey -= st.ey * b;
     return [st.x, st.y];
