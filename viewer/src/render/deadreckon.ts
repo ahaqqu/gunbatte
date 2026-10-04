@@ -38,6 +38,12 @@ interface DRState {
 export class DeadReckoner {
   private s = new Map<number, DRState>();
 
+  /** Drop all per-unit state: unit ids are reused across matches, so a new
+   * match must not inherit the previous one's anchors and corrections. */
+  reset(): void {
+    this.s.clear();
+  }
+
   /** Fold a fresh snapshot in for every unit the client can currently see:
    * each present unit's drift becomes a blended correction, absent units are
    * forgotten (their next appearance re-initializes). `ts` is the wallclock

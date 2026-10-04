@@ -779,6 +779,11 @@ async function startPlay(
       playUnits = new UnitViews(stage, realNames);
       showMatchHud();
       if (lobby) hideLobbyRoom();
+      // Dead-reckoner state is keyed by unit id, and ids are reused across
+      // matches: a new match must not inherit the previous one's anchors
+      // and pending corrections (worse if youIndex shifted, which can
+      // anchor a stale state to a different unit's id).
+      playDr.reset();
       // The room's own mode wins: an invite code can be pasted into a link
       // whose ?mode disagrees (a royale link with a raid room's code).
       const header =
@@ -793,6 +798,7 @@ async function startPlay(
       prevEnemyHp = new Map(); prevProjectiles = new Map(); prevWeapon = null;
       playProjPrev = new Float32Array(0); playProjCur = new Float32Array(0);
       playProjTick = -1; playProjObsTs = 0;
+      playUnitTick = -1;
       killProcessed = 0;
       lastSeenPos = new Map();
       prevDashOn = false; prevShieldOn = false; prevCompPos = null;

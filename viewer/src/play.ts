@@ -299,6 +299,11 @@ export class PlayClient {
       } else if (v.type === "match_start") {
         this.playing = true;
         this.lobby = null;
+        // Drop the previous match's final snapshot: a heartbeat firing
+        // before this match's first observation would otherwise send the
+        // old match's tick stamp (rejected as a future claim) and consume
+        // the dash/fire latches with it.
+        this.lastObs = null;
         this.startHeartbeat();
         this.setStatus("playing");
         this.cb.onStart(v.you_index ?? 0, v.bots ?? [], v.role === "boss" ? "boss" : "raider");
