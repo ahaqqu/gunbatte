@@ -43,7 +43,7 @@ flowchart LR
     you -->|"writes"| bot
     you -->|"watches · plays"| browser
     bot <-->|"WebSocket — every tick:<br/>observation ↓ · action ↑"| lobby
-    browser <-->|"play: the same bot protocol<br/>watch: replays + live frames"| lobby
+    browser <-->|"play: the same WebSocket as a bot<br/>watch: replays + live frames"| lobby
     game -.->|"runs the sim in-process"| engine
     viewer -.->|"engine compiled to WASM —<br/>re-simulates replays at 60 fps"| engine
 ```
