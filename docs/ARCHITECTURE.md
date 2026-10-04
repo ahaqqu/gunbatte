@@ -14,11 +14,13 @@ hope).
 ## The components
 
 Four components make up GUNBATTE — a shared deterministic engine, the two
-server roles that run it, and the browser viewer — with your bot and your
-browser as the actors on either end:
+server roles that run it, and the browser viewer — with you, your bot, and
+your browser as the actors around them. You never touch the server directly:
+everything you do goes through the bot you wrote or the browser you drive:
 
 ```mermaid
 flowchart LR
+    you["You<br/>(a human)"]
     bot["Your AI bot<br/>(any language)"]
 
     subgraph browser["Your browser"]
@@ -37,6 +39,8 @@ flowchart LR
         game -->|"writes results, ELO,<br/>replay path at match end"| db
     end
 
+    you -->|"writes"| bot
+    you -->|"watches · plays"| browser
     bot <-->|"WebSocket — every tick:<br/>observation ↓ · action ↑"| lobby
     browser <-->|"play: the same bot protocol<br/>watch: replays + live frames"| lobby
     game -.->|"runs the sim in-process"| engine
