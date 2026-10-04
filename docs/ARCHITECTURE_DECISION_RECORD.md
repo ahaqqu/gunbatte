@@ -200,6 +200,36 @@ database interface is the migration path.
   ≤4096-byte) 64×64 belief heat map — write-only overlay for viewers. It
   can lie; it is decoration, not state.
 
+## Live-play rendering: dead reckoning, not interpolation
+
+- **Live unit positions are extrapolated, not interpolated.** Between the
+  10 Hz observations the play client carries every rendered unit forward
+  along its last reported velocity (`viewer/src/render/deadreckon.ts`):
+  120 ms cap, corrections blended out over ~100 ms, a hard snap only past
+  48 units (respawn, re-entry), and a full freeze when snapshots stop —
+  a stalled link must never send sprites flying. Sprites, fog holes, and
+  the camera all consume the same carried-forward positions.
+- *Why extrapolation and not the industry-default interpolation:* the big
+  shooters interpolate remote players because their servers run lag
+  compensation — the server rewinds hit validation to what the shooter
+  saw, paying back the ~100 ms the interpolation added. This game's
+  server resolves bullets against where enemies actually are (rewind
+  would rewrite the projectile model, feed per-player network history
+  into a deterministic sim, and break thin replay verification), so
+  interpolated enemies would render ~100 ms deeper in the past with
+  nothing paying for it. Extrapolation keeps what you aim at close to
+  what the server will resolve; the cost is a bounded slide when someone
+  stops or turns. If lag compensation is ever built, this decision is
+  the one to revisit.
+- **Play input rides a 50 ms heartbeat, not observation arrival.** Input
+  used to be sampled only when an observation arrived, so a stalled link
+  stalled input too — fewer observations meant fewer inputs, compounding
+  exactly when the link was worst. The heartbeat keeps input flowing;
+  the server already accepts stale tick stamps (`input_window_ticks`)
+  and repeats the last move when a tick arrives empty (momentum fill),
+  so the extra sends need no server change. Observation arrival remains
+  a fast path for freshness.
+
 ## Security model — what each guard is for
 
 - **Input clamping at the door** ("legal but bad"): throttle clamped to

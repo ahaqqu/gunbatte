@@ -14,6 +14,7 @@ import { LobbyInfo, PlayClient, PlayObs } from "./play.js";
 import { Stage } from "./render/stage.js";
 import { drawArena } from "./render/arena.js";
 import { UnitViews } from "./render/units.js";
+import { DeadReckoner } from "./render/deadreckon.js";
 import { Fx } from "./render/fx.js";
 import { PickupLayer, ProjectileLayer, ZoneLayerView } from "./render/world.js";
 import { FogView } from "./render/fog.js";
@@ -574,6 +575,11 @@ let playProjPrev: Float32Array = new Float32Array(0);
 let playProjCur: Float32Array = new Float32Array(0);
 let playProjTick = -1;
 let playProjObsTs = 0;
+// Dead reckoning for live units (render/deadreckon.ts): each fresh snapshot
+// is folded in once; every frame then renders carried-forward positions so
+// motion is smooth between the 10Hz observations.
+const playDr = new DeadReckoner();
+let playUnitTick = -1;
 let playEntrants: string[] = [];
 let playYouIndex = 0;
 // Combat-feel state: diffs between the last two observations drive the
@@ -773,6 +779,11 @@ async function startPlay(
       playUnits = new UnitViews(stage, realNames);
       showMatchHud();
       if (lobby) hideLobbyRoom();
+      // Dead-reckoner state is keyed by unit id, and ids are reused across
+      // matches: a new match must not inherit the previous one's anchors
+      // and pending corrections (worse if youIndex shifted, which can
+      // anchor a stale state to a different unit's id).
+      playDr.reset();
       // The room's own mode wins: an invite code can be pasted into a link
       // whose ?mode disagrees (a royale link with a raid room's code).
       const header =
@@ -787,6 +798,7 @@ async function startPlay(
       prevEnemyHp = new Map(); prevProjectiles = new Map(); prevWeapon = null;
       playProjPrev = new Float32Array(0); playProjCur = new Float32Array(0);
       playProjTick = -1; playProjObsTs = 0;
+      playUnitTick = -1;
       killProcessed = 0;
       lastSeenPos = new Map();
       prevDashOn = false; prevShieldOn = false; prevCompPos = null;
@@ -1003,6 +1015,34 @@ function playLoop(ts: number): void {
   const me = obs.you.main;
   const names = playEntrants.map((n, i) => (i === playYouIndex ? n + " (YOU)" : n));
 
+  // Fold each fresh snapshot into the dead reckoner once per observation.
+  if (obs.tick !== playUnitTick) {
+    playUnitTick = obs.tick;
+    const drUnits: { id: number; pos: [number, number]; vel?: [number, number] }[] = [
+      { id: 1 + playYouIndex, pos: me.pos, vel: me.vel },
+    ];
+    if (obs.you.companion.alive && obs.you.companion.pos) {
+      drUnits.push({ id: 101 + playYouIndex, pos: obs.you.companion.pos, vel: obs.you.companion.vel });
+    }
+    for (const p of obs.seen.players) {
+      if (p.id - 1 !== playYouIndex) drUnits.push({ id: p.id, pos: p.pos, vel: p.vel });
+    }
+    for (const c of obs.seen.companions) drUnits.push({ id: 100000 + c.id, pos: c.pos });
+    playDr.observe(drUnits, ts);
+  }
+  // One advance per unit per frame, reused by every consumer (sprites, fog,
+  // camera, FX placement) — a second call would integrate the state twice.
+  const drPos = new Map<number, [number, number]>();
+  const drPosOf = (id: number, raw: [number, number]): [number, number] => {
+    let p = drPos.get(id);
+    if (!p) {
+      p = playDr.pos(id, raw, ts, dt);
+      drPos.set(id, p);
+    }
+    return p;
+  };
+  const mePos = drPosOf(1 + playYouIndex, me.pos);
+
   // Frame-shaped float view: self from obs.you, enemies through fog.
   const units = new Float32Array(bots * 2 * 11);
   const setUnit = (slot: number, id: number, bot: number, kind: number, u: { pos: [number, number]; vel?: [number, number]; facing?: number; hp?: number; alive: boolean; status?: string[]; maxhp: number }) => {
@@ -1016,30 +1056,31 @@ function playLoop(ts: number): void {
     units[o + 10] = u.maxhp;
   };
   setUnit(playYouIndex * 2, 1 + playYouIndex, playYouIndex, 0, {
-    pos: me.pos, vel: me.vel, facing: me.facing, hp: me.hp,
+    pos: mePos, vel: me.vel, facing: me.facing, hp: me.hp,
     alive: me.alive, status: me.status, maxhp: 100,
   });
   if (obs.you.companion.pos && obs.you.companion.alive) {
     setUnit(playYouIndex * 2 + 1, 101 + playYouIndex, playYouIndex, 1, {
-      pos: obs.you.companion.pos, vel: obs.you.companion.vel, facing: obs.you.companion.facing,
+      pos: drPosOf(101 + playYouIndex, obs.you.companion.pos), vel: obs.you.companion.vel, facing: obs.you.companion.facing,
       hp: obs.you.companion.hp, alive: true, maxhp: 30,
     });
   }
   for (const p of obs.seen.players) {
     const bot = p.id - 1;
     if (bot === playYouIndex || bot < 0 || bot >= bots) continue;
-    lastSeenPos.set(p.id, p.pos);
-    setUnit(bot * 2, p.id, bot, 0, { pos: p.pos, vel: p.vel, facing: p.facing, hp: p.hp, alive: true, maxhp: 100 });
+    const pPos = drPosOf(p.id, p.pos);
+    lastSeenPos.set(p.id, pPos);
+    setUnit(bot * 2, p.id, bot, 0, { pos: pPos, vel: p.vel, facing: p.facing, hp: p.hp, alive: true, maxhp: 100 });
   }
 
   // Rising-edge status FX for the local tarsius: dash streak, shield pop.
   const dashOn = !!me.status?.includes("dashing");
   const shieldOn = !!me.status?.includes("shielding");
   if (dashOn && !prevDashOn) {
-    playFx!.dashStreak(me.pos[0], me.pos[1], me.facing ?? 0, playYouIndex);
+    playFx!.dashStreak(mePos[0], mePos[1], me.facing ?? 0, playYouIndex);
     zoomPunch = Math.max(zoomPunch, 0.12);
   }
-  if (shieldOn && !prevShieldOn) playFx!.shieldPop(me.pos[0], me.pos[1]);
+  if (shieldOn && !prevShieldOn) playFx!.shieldPop(mePos[0], mePos[1]);
   prevDashOn = dashOn;
   prevShieldOn = shieldOn;
   playUnits.update(units, units, 0, bots * 2, true);
@@ -1051,19 +1092,25 @@ function playLoop(ts: number): void {
   );
   playZone!.update(zoneArr, false, !!obs.global.zone.next);
 
-  // The human always sees through the fog.
+  // The human always sees through the fog — holes and markers ride the same
+  // carried-forward positions as the sprites, so nobody pokes outside their
+  // own vision hole between snapshots.
   playFog!.show();
   playFog!.update({
     me: {
-      main: { pos: me.pos, alive: me.alive },
-      comp: { pos: obs.you.companion.pos, alive: obs.you.companion.alive },
+      main: { pos: mePos, alive: me.alive },
+      comp: { pos: drPosOf(101 + playYouIndex, obs.you.companion.pos), alive: obs.you.companion.alive },
     },
     seenPlayers: obs.seen.players.map((p) => ({
       ...p,
+      pos: drPosOf(p.id, p.pos),
       // Server observations carry raw hp (0..100); the fog view wants a fraction.
       hp: p.hp === undefined ? undefined : Math.max(0, p.hp) / 100,
     })),
-    seenCompanions: obs.seen.companions,
+    seenCompanions: obs.seen.companions.map((c) => ({
+      ...c,
+      pos: drPosOf(100000 + c.id, c.pos),
+    })),
     seenProjectiles: obs.seen.projectiles,
     seenPickups: obs.seen.pickups,
     heard: obs.heard,
@@ -1089,8 +1136,9 @@ function playLoop(ts: number): void {
   );
   playPickups!.update(packPlayPickups(obs), obs.seen.pickups.length, obs.tick);
 
-  // Camera rides the player; zoomPunch kicks in on kills/hits/dashes.
-  stage.setTarget(me.pos[0], me.pos[1], 1.05 + zoomPunch);
+  // Camera rides the carried-forward position of the player; zoomPunch kicks
+  // in on kills/hits/dashes.
+  stage.setTarget(mePos[0], mePos[1], 1.05 + zoomPunch);
   zoomPunch *= Math.exp(-dt * 5);
 
   // ---------------- combat feel: diff this observation against the last one
@@ -1149,7 +1197,7 @@ function playLoop(ts: number): void {
         // Own muzzle rides my facing; the bullet spawns just past the barrel.
         const a = (90 - (me.facing ?? 0)) * Math.PI / 180;
         playFx!.muzzleFlash(
-          me.pos[0] + Math.cos(a) * 18, me.pos[1] + Math.sin(a) * 18,
+          mePos[0] + Math.cos(a) * 18, mePos[1] + Math.sin(a) * 18,
           90 - (me.facing ?? 0), pr.w, col,
         );
         sfx.play("shot", 0, 0.95);
@@ -1161,7 +1209,7 @@ function playLoop(ts: number): void {
     for (const [id, pr] of prevProjectiles) {
       if (seenProjs.has(id) || pr.w !== 6) continue;
       playFx!.explosion(pr.x, pr.y);
-      const dx = pr.x - me.pos[0], dy = pr.y - me.pos[1];
+      const dx = pr.x - mePos[0], dy = pr.y - mePos[1];
       const pan = Math.max(-1, Math.min(1, dx / Math.max(60, Math.hypot(dx, dy)) * 0.85));
       sfx.play("boom", pan, 0.55);
     }
@@ -1173,7 +1221,7 @@ function playLoop(ts: number): void {
       const w = WEAPONS[weaponIdx(wName)];
       showBanner(`picked up ${w.label}!`, w.color, 1900);
       sfx.play("pickup", 0, 1);
-      playFx!.sparkle(me.pos[0], me.pos[1]);
+      playFx!.sparkle(mePos[0], mePos[1]);
       zoomPunch = Math.max(zoomPunch, 0.1);
     }
     prevWeapon = wName;
@@ -1184,7 +1232,8 @@ function playLoop(ts: number): void {
   // Companion status pips.
   if (obs.you.companion.alive && obs.you.companion.pos) prevCompPos = obs.you.companion.pos;
   if (!prevCompAlive && obs.you.companion.alive && obs.you.companion.pos) {
-    playFx!.sparkle(obs.you.companion.pos[0], obs.you.companion.pos[1]);
+    const cPos = drPosOf(101 + playYouIndex, obs.you.companion.pos);
+    playFx!.sparkle(cPos[0], cPos[1]);
   }
   if (prevCompAlive && !obs.you.companion.alive) {
     sfx.play("boom", 0, 0.4);
@@ -1214,7 +1263,7 @@ function playLoop(ts: number): void {
   // Your elimination.
   if (prevMainAlive && !me.alive) {
     sfx.play("boom", 0, 1);
-    playFx!.deathBlast(me.pos[0], me.pos[1], playYouIndex);
+    playFx!.deathBlast(mePos[0], mePos[1], playYouIndex);
     flashVignette(0.9);
     zoomPunch = Math.max(zoomPunch, 0.3);
     showBanner("you were eliminated", "#e6455f", 2400);
