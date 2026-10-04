@@ -1,11 +1,11 @@
 ---
-name: fixer
-description: Resolve every itemized review finding on a GitHub PR — accept or reject each with a threaded reply on the original comment, fix the accepted ones, keep CI green, and post a resolution report on the PR. The closing half of the code-review loop.
+name: resolve-review-findings
+description: Resolve every itemized review finding on a GitHub PR — accept or reject each with a threaded reply on the original comment, fix the accepted ones, keep CI green, and post a resolution report on the PR. The closing half of the review-code loop.
 ---
 
-# Fixer (resolve PR review findings)
+# Resolve review findings (GitHub PR)
 
-Take a PR that carries itemized review findings (the code-review format: one
+Take a PR that carries itemized review findings (the review-code format: one
 comment per finding with a stable ID and a priority) and drive every finding
 to an explicit, posted disposition. Nothing stays silent: every item ends
 with an accept or a reject on the record, accepted items end in a fixing

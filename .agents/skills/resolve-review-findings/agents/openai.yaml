@@ -1,5 +1,5 @@
 interface:
-  display_name: "Fixer"
+  display_name: "Resolve Review Findings"
   short_description: "Resolve PR review findings to posted dispositions"
 policy:
   allow_implicit_invocation: false
