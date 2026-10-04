@@ -11,21 +11,58 @@ in the [architecture decision record](ARCHITECTURE_DECISION_RECORD.md).
 updates this document in the same PR (AGENTS.md makes this a rule, not a
 hope).
 
-## The three participants
+## The components
+
+Four components make up GUNBATTE — a shared deterministic engine, the two
+server roles that run it, and the browser viewer — plus one database they
+share, with you, your bot, and the viewer in your browser as the actors
+around them. You never touch the server directly: everything you do goes
+through the bot you wrote or the browser you drive:
 
 ```mermaid
 flowchart LR
+    you["You<br/>(a human)"]
     bot["Your AI bot<br/>(any language)"]
-    browser["Your browser<br/>(watch · play)"]
-    server["GUNBATTE server"]
+    viewer["Viewer<br/>(in your browser)"]
+    engine["Engine<br/>(gunbatte-core)"]
 
-    bot <-->|"WebSocket — every tick:<br/>observation ↓ · action ↑"| server
-    browser <-->|"play: the same bot protocol<br/>watch: replays + live frames"| server
+    subgraph server["GUNBATTE server — one process today"]
+        lobby["Lobby<br/>(matchmaker)"]
+        game["Game server"]
+        db["Database"]
+
+        lobby <-->|"claims names + tokens ·<br/>serves ladder + replays"| db
+        lobby -->|"hands over the roster + relays every tick<br/>gets back results + replays"| game
+        game -->|"writes results, ELO,<br/>replay path at match end"| db
+    end
+
+    you -->|"writes"| bot
+    you -->|"watches · plays"| viewer
+    viewer <-->|"play: the same WebSocket as a bot<br/>watch: replays + live frames"| lobby
+    bot <-->|"WebSocket — every tick:<br/>observation ↓ · action ↑"| lobby
+    game -.->|"runs the sim in-process"| engine
+    viewer -.->|"engine compiled to WASM —<br/>re-simulates replays at 60 fps"| engine
 ```
+
+**The technology behind each component:**
+
+| Component | Technology | What it does |
+| --- | --- | --- |
+| Engine (`gunbatte-core`) | pure Rust · fixed-point math | the deterministic simulation — run in-process by the game server, compiled to WASM for the viewer |
+| Lobby (matchmaker) | Rust · axum (WebSocket) | owns the WebSocket and registration, the queue, private lobbies, the ladder page |
+| Game server | Rust · tokio | runs matches: the 10 Hz tick loop, fog of war, replay recording |
+| Database | SQLite | identities, standings, replay listing — the only state both server roles touch |
+| Viewer | TypeScript · PixiJS · Vite | the browser app; re-simulates replays bit for bit at 60 fps |
 
 **Bots and browsers never talk to each other directly.** The server is the
 only meeting point: everything either side learns about the other passes
 through it, is filtered by the game rules, and is recorded.
+
+**The WebSocket terminates at the lobby, and that is deliberate.** The game
+server never sees a socket: it receives each match as a roster of entrants,
+and the lobby relays every observation and action for as long as the match
+runs. Keeping all sockets on one side of that handoff is what keeps a
+running match untouchable from outside its owner.
 
 ## How the communication works
 
