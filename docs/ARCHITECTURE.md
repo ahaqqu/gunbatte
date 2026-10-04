@@ -28,9 +28,13 @@ flowchart LR
     engine["Engine (gunbatte-core)<br/>pure Rust · fixed-point math"]
 
     subgraph server["GUNBATTE server — one process today"]
-        lobby["Lobby (matchmaker)<br/>Rust · axum (WebSocket) · SQLite"]
+        lobby["Lobby (matchmaker)<br/>Rust · axum (WebSocket)"]
         game["Game server<br/>Rust · tokio · 10 Hz match loop"]
+        db["Database — SQLite<br/>shared by both roles"]
+
+        lobby <-->|"claims names + tokens ·<br/>serves ladder + replays"| db
         lobby -->|"hands over the roster<br/>gets back results + replays"| game
+        game -->|"writes results, ELO,<br/>replay path at match end"| db
     end
 
     bot <-->|"WebSocket — every tick:<br/>observation ↓ · action ↑"| lobby
