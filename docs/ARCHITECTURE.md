@@ -14,9 +14,10 @@ hope).
 ## The components
 
 Four components make up GUNBATTE — a shared deterministic engine, the two
-server roles that run it, and the browser viewer — with you, your bot, and
-your browser as the actors around them. You never touch the server directly:
-everything you do goes through the bot you wrote or the browser you drive:
+server roles that run it, and the browser viewer — plus one database they
+share, with you, your bot, and your browser as the actors around them. You
+never touch the server directly: everything you do goes through the bot you
+wrote or the browser you drive:
 
 ```mermaid
 flowchart LR
@@ -24,15 +25,15 @@ flowchart LR
     bot["Your AI bot<br/>(any language)"]
 
     subgraph browser["Your browser"]
-        viewer["Viewer<br/>TypeScript · PixiJS · Vite"]
+        viewer["Viewer"]
     end
 
-    engine["Engine (gunbatte-core)<br/>pure Rust · fixed-point math"]
+    engine["Engine<br/>(gunbatte-core)"]
 
     subgraph server["GUNBATTE server — one process today"]
-        lobby["Lobby (matchmaker)<br/>Rust · axum (WebSocket)"]
-        game["Game server<br/>Rust · tokio · 10 Hz match loop"]
-        db["Database — SQLite<br/>shared by both roles"]
+        lobby["Lobby<br/>(matchmaker)"]
+        game["Game server"]
+        db["Database"]
 
         lobby <-->|"claims names + tokens ·<br/>serves ladder + replays"| db
         lobby -->|"hands over the roster + relays every tick<br/>gets back results + replays"| game
@@ -46,6 +47,16 @@ flowchart LR
     game -.->|"runs the sim in-process"| engine
     viewer -.->|"engine compiled to WASM —<br/>re-simulates replays at 60 fps"| engine
 ```
+
+**The technology behind each component:**
+
+| Component | Technology | What it does |
+| --- | --- | --- |
+| Engine (`gunbatte-core`) | pure Rust · fixed-point math | the deterministic simulation — run in-process by the game server, compiled to WASM for the viewer |
+| Lobby (matchmaker) | Rust · axum (WebSocket) | owns the WebSocket and registration, the queue, private lobbies, the ladder page |
+| Game server | Rust · tokio | runs matches: the 10 Hz tick loop, fog of war, replay recording |
+| Database | SQLite | identities, standings, replay listing — the only state both server roles touch |
+| Viewer | TypeScript · PixiJS · Vite | the browser app; re-simulates replays bit for bit at 60 fps |
 
 **Bots and browsers never talk to each other directly.** The server is the
 only meeting point: everything either side learns about the other passes
