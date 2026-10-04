@@ -35,7 +35,7 @@ flowchart LR
         db["Database — SQLite<br/>shared by both roles"]
 
         lobby <-->|"claims names + tokens ·<br/>serves ladder + replays"| db
-        lobby -->|"hands over the roster<br/>gets back results + replays"| game
+        lobby -->|"hands over the roster + relays every tick<br/>gets back results + replays"| game
         game -->|"writes results, ELO,<br/>replay path at match end"| db
     end
 
@@ -50,6 +50,12 @@ flowchart LR
 **Bots and browsers never talk to each other directly.** The server is the
 only meeting point: everything either side learns about the other passes
 through it, is filtered by the game rules, and is recorded.
+
+**The WebSocket terminates at the lobby, and that is deliberate.** The game
+server never sees a socket: it receives each match as a roster of entrants,
+and the lobby relays every observation and action for as long as the match
+runs. Keeping all sockets on one side of that handoff is what keeps a
+running match untouchable from outside its owner.
 
 ## How the communication works
 
