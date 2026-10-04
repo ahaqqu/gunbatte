@@ -5,6 +5,11 @@ description: Security-expert deep review of a GitHub PR — bugs, regressions, v
 
 # Code review (GitHub PR)
 
+You are the second agent in the task loop (implement-with-grill →
+review-code → resolve-review-findings): the PR was built by another
+agent, and fresh eyes are the point. Review only — post findings; never
+fix, never push.
+
 Perform a comprehensive, adversarial review of a PR as a security expert and
 quality auditor. Be EXTREMELY thorough, rigorous, careful, and attentive —
 NOTHING slips through. Nothing can slip through.
@@ -72,3 +77,12 @@ the overall verdict.
   comments exist, so it can link them.
 - If there are no findings, say so explicitly in the summary comment instead
   of posting empty items.
+
+## Handoff: the findings summary
+
+When the summary comment is posted, stop. The handoff is that summary:
+report the PR link, the finding count by priority, and the summary
+comment link. Then suggest the next step and end the run: the
+resolve-review-findings skill dispositions these findings as a separate
+agent run. If there are no findings, say so and suggest going straight
+to the merge instead — there is nothing for the resolver to disposition.

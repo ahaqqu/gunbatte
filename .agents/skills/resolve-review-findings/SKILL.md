@@ -5,6 +5,10 @@ description: Resolve every itemized review finding on a GitHub PR — accept or 
 
 # Resolve review findings (GitHub PR)
 
+You are the third agent in the task loop (implement-with-grill →
+review-code → resolve-review-findings); your span runs from the review
+findings to the merged, verified, cleaned-up change.
+
 Take a PR that carries itemized review findings (the review-code format: one
 comment per finding with a stable ID and a priority) and drive every finding
 to an explicit, posted disposition. Nothing stays silent: every item ends
@@ -28,8 +32,8 @@ commit, and the PR ends green.
    cause.
 4. **Run the full local CI gate set after fixes** — `make test` (both
    profiles) and `make ci` for Rust, `npm run build` for the viewer, and the
-   real-browser pass for anything the player sees or hears (AGENTS.md
-   step 4).
+   real-browser pass for anything the player sees or hears (the
+   implement-with-grill skill's step 4).
 5. **Push fixes to the same branch**, then post the resolution report as a
    PR comment listing each item ID, its disposition, the threaded reply
    comment ID, and the fixing commit SHA (for accepted items). Post it
@@ -55,12 +59,54 @@ commit, and the PR ends green.
 ## Where the work happens
 
 - Work in the same worktree as the original implementation; if that worktree
-  no longer exists, recreate one per AGENTS.md (`git fetch origin && git
+  no longer exists, recreate one per the implement-with-grill skill
+  (`git fetch origin && git
   worktree add ../gunbatte-<task-slug> -b <branch> origin/main`) and check
   out the implementation branch into it — fixes build on the original work,
   never on a fresh start.
 - If the implementation branch has no open PR yet, create one before
   starting the loop: dispositions and the resolution report are PR
   artifacts.
-- Do not merge. Merging is the user's call; the loop ends at a green,
-  merge-ready PR.
+- Do not merge without the user's go. The loop ends at a green,
+  merge-ready PR and the handoff; merge & deploy, live verification, and
+  worktree cleanup run once the user confirms the suggested merge (see
+  the handoff section below).
+
+## Handoff: the resolution summary
+
+The loop's last artifact doubles as the handoff. Report the PR link, the
+disposition count (accepted / rejected), and the resolution report
+comment link — then suggest the merge and end the run. Merging ships
+code to the live box: it happens only on the user's go.
+
+## The merge, on the user's go
+
+When the user gives the go — later in this run if it is still open,
+otherwise a follow-up run of this skill — finish the span:
+
+1. **Merge.** Every finding dispositioned and GitHub reporting the PR
+   genuinely ready: `gh pr view --json mergeable,mergeStateStatus` says
+   `MERGEABLE` / `CLEAN`, every check green (a docs/meta-only PR runs no
+   checks at all — mergeability is then the whole gate).
+2. **Deploy is part of the task.** Confirm CI is green on main, then
+   watch the `deploy` workflow (it fires on CI success via
+   `workflow_run`) until it succeeds — it runs
+   `provision/vps/deploy.sh`: build, rsync, restart `gunbatte.service`.
+   Docs/meta-only merges (the `paths-ignore` list in ci.yml) start no CI
+   run and so fire no deploy — verify by absence in the Actions tab
+   instead.
+3. **Verify the work on the live URL**
+   ([play.gunbatte.ahaqqu.com]). CI rebuilds on its own toolchain, so
+   asset hashes differ from any local build — verify by content (does
+   the served page/bundle contain the change?) and by playing the actual
+   flow the PR was about. Report what was verified and what couldn't be
+   (e.g. audibility in a headless browser).
+4. **Clean up the worktree.** The third agent owns the teardown; the
+   user never does it. Once the PR is merged (or closed without
+   merging), remove the worktree and the branch, then prune:
+
+   ```sh
+   git worktree remove ../gunbatte-<task-slug>
+   git branch -d <branch>
+   git fetch --prune
+   ```
