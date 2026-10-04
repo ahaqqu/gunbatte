@@ -28,8 +28,8 @@ commit, and the PR ends green.
    cause.
 4. **Run the full local CI gate set after fixes** — `make test` (both
    profiles) and `make ci` for Rust, `npm run build` for the viewer, and the
-   real-browser pass for anything the player sees or hears (AGENTS.md
-   step 4).
+   real-browser pass for anything the player sees or hears (the
+   implement-with-grill skill's step 4).
 5. **Push fixes to the same branch**, then post the resolution report as a
    PR comment listing each item ID, its disposition, the threaded reply
    comment ID, and the fixing commit SHA (for accepted items). Post it
@@ -55,7 +55,8 @@ commit, and the PR ends green.
 ## Where the work happens
 
 - Work in the same worktree as the original implementation; if that worktree
-  no longer exists, recreate one per AGENTS.md (`git fetch origin && git
+  no longer exists, recreate one per the implement-with-grill skill
+  (`git fetch origin && git
   worktree add ../gunbatte-<task-slug> -b <branch> origin/main`) and check
   out the implementation branch into it — fixes build on the original work,
   never on a fresh start.
@@ -64,5 +65,5 @@ commit, and the PR ends green.
   artifacts.
 - Do not merge inside this loop; the loop ends at a green, merge-ready PR.
   Merge & deploy, live verification, and worktree cleanup are the stages
-  that follow in the same run (the AGENTS.md workflow), taken up after this
-  skill completes.
+  that follow in the same run (implement-with-grill steps 8–10), taken up
+  after this skill completes.
