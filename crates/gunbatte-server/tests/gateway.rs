@@ -91,6 +91,28 @@ fn active_action(obs: &serde_json::Value) -> Option<serde_json::Value> {
     }))
 }
 
+/// Issue #68: match_start must tell each connection which roster slot is its
+/// own. Correct by luck while a solo human is always drafted first; with 2+
+/// humans the ELO-sorted draft can place a human anywhere, so every human
+/// connection asserts the field against its own name.
+fn assert_you_index(match_start: &serde_json::Value, who: &str) {
+    let entrants: Vec<String> = match_start["bots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b.as_str().map(String::from))
+        .collect();
+    let you = match_start["you_index"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("match_start carries you_index ({who}): {match_start}"))
+        as usize;
+    assert_eq!(
+        entrants.get(you).map(String::as_str),
+        Some(who),
+        "you_index must point at this connection's own entrant ({who}): {entrants:?}"
+    );
+}
+
 /// Poll the port until the spawned server actually accepts TCP. A fixed nap
 /// loses the race on a cold CI runner, where bind can lag the client's first
 /// connect attempt (seen as `Connection refused` in the 0.72s CI failure).
@@ -280,6 +302,7 @@ async fn solo_human_gets_house_fill() {
                     .as_array()
                     .map(|a| a.iter().filter_map(|b| b.as_str().map(String::from)).collect())
                     .unwrap_or_default();
+                assert_you_index(&v, "solo-human");
             }
             Some("match_over") => {
                 over = Some(v);
@@ -456,6 +479,7 @@ async fn lobby_host_and_invitee_play_a_private_royale() {
                         assert!(entrants.contains(&"lobby-guest".to_string()),
                             "the invitee plays: {entrants:?}");
                         assert_eq!(entrants.len(), 8, "house-filled to 8: {entrants:?}");
+                        assert_you_index(&v, "lobby-host");
                         host_tx.send(Message::Text(active_action(&v).unwrap().to_string())).await.ok();
                     }
                     Some("error") => panic!("host got error: {v}"),
@@ -472,6 +496,7 @@ async fn lobby_host_and_invitee_play_a_private_royale() {
                     assert_eq!(v["members"].as_array().unwrap().len(), 2);
                 } else if v["type"] == "match_start" {
                     guest_started = true;
+                    assert_you_index(&v, "lobby-guest");
                 }
                 guest_tx.send(Message::Text(active_action(&v).unwrap_or(json!({"tick":0})).to_string())).await.ok();
             }

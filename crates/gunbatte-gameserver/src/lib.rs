@@ -97,6 +97,7 @@ pub async fn run_match(
                 serde_json::json!({
                     "type": "match_start",
                     "bot": h.name,
+                    "you_index": b as u32,
                     "bots": names,
                     "map_id": engine.config.map_id,
                     "deadline_ms": engine.config.deadline_ms,

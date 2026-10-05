@@ -587,6 +587,10 @@ let playUnitTick = -1;
 const playPredictor = new OwnPredictor();
 let playEntrants: string[] = [];
 let playYouIndex = 0;
+// The ELIMINATED card's live count (issue #70): non-null while that card is
+// up, holding the alive count it last rendered. Any other over-card or a
+// hide clears it, so the updater below can never overwrite a different card.
+let elimAliveShown: number | null = null;
 // Combat-feel state: diffs between the last two observations drive the
 // hit confirms, hurt flashes, kill feed and audio (all client-side juice).
 let prevHp = 100;
@@ -657,7 +661,13 @@ function updateReticle(): void {
 const esc = (s: string): string =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+/** The ELIMINATED card's count line — shared by the death edge and the
+ * live updater so the wording exists in exactly one place. */
+const elimSub = (alive: number): string =>
+  `place revealed at match end — ${alive} still fighting`;
+
 function playOverShow(crown: string, title: string, sub: string, retryable = false): void {
+  elimAliveShown = null;
   const card = document.querySelector("#play-over .crown")!;
   card.textContent = crown;
   document.getElementById("play-over-title")!.textContent = title;
@@ -668,6 +678,7 @@ function playOverShow(crown: string, title: string, sub: string, retryable = fal
 }
 
 function playOverHide(): void {
+  elimAliveShown = null;
   document.getElementById("play-over")!.classList.add("hidden");
 }
 
@@ -799,7 +810,8 @@ async function startPlay(
             ? "SLAIN THE BOSS — you ARE the boss"
             : "SLAIN THE BOSS — raid!"
           : "live match";
-      hud.setHeader(realNames, header, 0);
+      // The seed is the match's one secret: it never shows live (issue #69).
+      hud.setHeader(realNames, header);
       prevHp = 100; prevEnergy = 100;
       prevMainAlive = true; prevCompAlive = true;
       prevEnemyHp = new Map(); prevProjectiles = new Map(); prevWeapon = null;
@@ -1288,9 +1300,19 @@ function playLoop(ts: number): void {
     flashVignette(0.9);
     zoomPunch = Math.max(zoomPunch, 0.3);
     showBanner("you were eliminated", "#e6455f", 2400);
-    playOverShow("💀", "ELIMINATED", `place revealed at match end — ${obs.global.alive} still fighting`);
+    playOverShow("💀", "ELIMINATED", elimSub(obs.global.alive));
+    elimAliveShown = obs.global.alive;
   }
   prevMainAlive = me.alive;
+
+  // The elimination card's count stays live while it shows (issue #70):
+  // observations keep flowing after death, so the card tracks the same
+  // number as the HUD's ALIVE counter instead of freezing at the death
+  // frame. elimAliveShown is only non-null while the ELIMINATED card is up.
+  if (elimAliveShown !== null && obs.global.alive !== elimAliveShown) {
+    elimAliveShown = obs.global.alive;
+    document.getElementById("play-over-sub")!.textContent = elimSub(obs.global.alive);
+  }
 
   // Zone discipline: beep + banner while taking zone damage.
   const zd = Math.hypot(me.pos[0] - obs.global.zone.center[0], me.pos[1] - obs.global.zone.center[1]);
