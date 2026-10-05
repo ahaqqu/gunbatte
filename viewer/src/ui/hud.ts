@@ -31,8 +31,11 @@ export class Hud {
     for (const el of [this.topbar, this.killfeed, this.legend]) el.classList.remove("hidden");
   }
 
-  setHeader(names: string[], mapId: string, seed: number): void {
-    this.matchSub.textContent = `map ${mapId} · seed ${seed} · ${names.length} entrants`;
+  /** Live play omits the seed (issue #69): it is the match's one secret and
+   * can never be shown truthfully there — only replays carry it. */
+  setHeader(names: string[], mapId: string, seed?: number): void {
+    const seedPart = seed === undefined ? "" : ` · seed ${seed}`;
+    this.matchSub.textContent = `map ${mapId}${seedPart} · ${names.length} entrants`;
   }
 
   stats(tick: number, alive: number, zonePhase: number, shrinking: boolean): void {
