@@ -14,8 +14,12 @@ State lives in `$GUNBATTE_DIR` (default `~/gunbatte`): the binary, `viewer/dist/
 
 ## One-time bootstrap
 
-DNS first: point `play.<domain>` and `site.<domain>` (A records) at the VPS.
-Then, from the repo root:
+DNS first: point `play.<domain>` and `site.<domain>` (A records, **DNS-only**
+— a proxied record hides the player's address from nginx's per-IP ceilings,
+see [LIMITS.md](../../LIMITS.md), and adds a proxy hop of jitter to a 10 Hz
+game) at the VPS. The zone is hand-managed in Cloudflare: the box manifest's
+DNS table is the inventory, and the post-deploy gate fails if a name stops
+resolving. Then, from the repo root:
 
 ```sh
 GUNBATTE_GAME_HOST=play.example.com \
@@ -129,11 +133,17 @@ grant is scoped to the app service, so CI can never edit nginx.
 
 **The post-deploy gate:** every non-bootstrap deploy ends with the shared-box
 doctor sweep — nginx config test, `sites-enabled/` hygiene, failed units,
-every app's listeners and certs. A gunbatte deploy that leaves the box
-unhealthy turns its own run red, with no cross-repo review needed. The sweep
-is **one copy on the box**: homepage (the box's owner) updates
-`/srv/vps-ops/doctor.sh` on every one of its deploys, and this repo's deploy
-runs that file — nothing vendored here, nothing fetched, no credential. If
+every app's listeners and certs, and every DNS name in the box manifest's
+table. A gunbatte deploy that leaves the box unhealthy turns its own run
+red, with no cross-repo review needed. The DNS row earns its place: the zone
+is hand-managed in Cloudflare, no IaC owns it, so a name that stops
+resolving is invisible until a player complains — which is exactly what
+happened when the 2026-10-25 zone re-creation dropped this app's pair and
+nothing noticed for four days (incident note in MACHINE.md) — and the sweep
+now fails the deploy on one. It is **one copy on the box**: homepage (the
+box's owner) updates `/srv/vps-ops/doctor.sh` on every one of its deploys,
+and this repo's deploy runs that file — nothing vendored here, nothing
+fetched, no credential. If
 homepage has not deployed since the ops dir was bootstrapped, the gate prints
 a warning instead of failing. It runs as the deploy identity, whose sudoers
 drop-in carries two read-only diagnostics for it (`nginx -t`,
