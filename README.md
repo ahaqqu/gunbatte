@@ -205,6 +205,47 @@ make viewer                # rebuild wasm + viewer into viewer/dist
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+## Deploying
+
+Host configuration lives in [`ahaqqu/vps`](https://github.com/ahaqqu/vps)
+under `gunbatte/`: the `gunbatte.service` unit, the nginx site, the deploy
+identity's sudoers grant and the deploy contract. This repository only builds
+and ships the code tree; it has no bootstrap, nginx or direct `systemctl` path.
+
+`./deploy.sh` builds the release binary and viewer, then uploads an artifact
+whose root is exactly:
+
+```
+gunbatte-server
+viewer/dist/
+website/
+```
+
+as `gunbatte-deploy@<host>:/srv/vps-incoming/gunbatte.tar.gz`, and runs the
+box's shared helper:
+
+```sh
+ssh gunbatte-deploy@<host> 'sudo -n /usr/local/sbin/vps-deploy gunbatte'
+```
+
+The helper moves the current tree aside, carries `ladder.db` and `replays/`
+across the swap (state is preserved), publishes `website/` to the nginx web
+root, restarts `gunbatte.service` and health-checks `/ladder`. A failed deploy
+leaves the previous tree and its state in place.
+
+The helper, the `gunbatte-deploy` identity and the root-only
+`/etc/gunbatte/proxy.env` are installed by the owner-run
+[`ahaqqu/vps` bootstrap](https://github.com/ahaqqu/vps/blob/main/docs/DEPLOY.md).
+This repository's public key must be appended to `gunbatte-deploy` (see
+[`docs/ACCESS.md`](https://github.com/ahaqqu/vps/blob/main/docs/ACCESS.md)
+and `runbook/BOOTSTRAP.md` §8a) before the first deploy; until then the deploy
+fails closed at `vps-deploy`.
+
+CI runs the same `./deploy.sh` after a green `CI` run on `main`, using the
+`VPS_USER` (default `gunbatte-deploy`), `VPS_HOST` and `GUNBATTE_GAME_HOST`
+repository variables and the existing `VPS_DEPLOY_SSH_KEY` /
+`VPS_KNOWN_HOSTS` secrets.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

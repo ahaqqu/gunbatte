@@ -280,7 +280,8 @@ database interface is the migration path.
   is the operations map.
 - **Transport/deployment:** TLS at nginx, CSP on the viewer, a systemd
   hardening cage around the binary — box-level facts live in the shared
-  VPS manifest (ahaqqu/homepage → `provision/vps/MACHINE.md`), not here.
+  [ahaqqu/vps](https://github.com/ahaqqu/vps) repository (`docs/DEPLOY.md`,
+  `docs/ACCESS.md`, `gunbatte/`), not here.
 
 ## The scale-out contract (why the seam exists)
 
@@ -348,5 +349,5 @@ reconfigures from (issue #71 holds the re-attach policy).
 | registration, queue, lobbies, ladder, limits, identity | `gunbatte-lobby` (+ `gunbatte-node/db`) |
 | the tick loop, deadline/forfeit handling, results write-back | `gunbatte-gameserver` |
 | anything crossing roles | the seam in `gunbatte-node` — widen it deliberately, never bridge it |
-| deployment, nginx, systemd, TLS | the box manifest first (AGENTS.md), then `provision/` |
+| deployment, nginx, systemd, TLS | [ahaqqu/vps](https://github.com/ahaqqu/vps) first (`docs/DEPLOY.md`, `docs/ACCESS.md`, `gunbatte/`); this repo only builds/ships the artifact |
 | bot-facing protocol | [AI-BOTS.md](AI-BOTS.md) + [ARCHITECTURE.md](ARCHITECTURE.md), in the same PR |

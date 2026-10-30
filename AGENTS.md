@@ -73,24 +73,27 @@ how the next agent orients; a drifted map lies confidently, which is worse
 than none. Any change that makes a sentence in either false — crates and
 their roles, the seam, the wire protocol, identity and tiers, determinism
 guarantees, security boundaries, the scale-out contract, the known debts —
-updates the affected doc in the same PR, exactly like the box-manifest rule
-below works for VPS changes. If you built something a future agent must
+updates the affected doc in the same PR, exactly like the shared-host-config
+rule below works for VPS changes. If you built something a future agent must
 understand to work here, it gets a paragraph in the decision record; if you
 removed something, its paragraph goes too; if you reversed a recorded
 decision, the section is rewritten to say why the old one gave way. Review
 question for every PR: *does anything in either architecture doc now read
 stale?*
 
-## VPS changes start at the box manifest
+## VPS changes start in the shared vps repository
 
-The box behind `*.ahaqqu.com` is shared, and its single manifest — every app,
-identity, port, nginx file, TLS lineage, plus the shared rules — lives in
-[ahaqqu/homepage](https://github.com/ahaqqu/homepage) →
-`provision/vps/MACHINE.md`. Before writing any script or template that changes
-VPS configuration (nginx, systemd, sudoers, TLS), read that manifest first and
-let it decide where the change belongs: each app repo provisions itself,
-box-level facts and shared rules belong to the manifest, and the manifest is
-updated in the same PR as the change that touches them.
+The box behind `*.ahaqqu.com` is shared, and its single source of truth is
+[ahaqqu/vps](https://github.com/ahaqqu/vps): one directory per app
+(`gunbatte/`, `kajianq/`, `rumaq/`, `homepage/`) plus `host/` for shared
+files. Before writing anything that changes VPS configuration (nginx,
+systemd, sudoers, TLS, deploy contract), read that repository's
+`docs/DEPLOY.md`, `docs/ACCESS.md` and the app's directory; host config
+belongs there, not here. This repository only builds and uploads the code
+artifact through `vps-deploy gunbatte`. Never add a second writer
+(bootstrap/apply path) here: the deploy fails closed until the owner has
+bootstrapped the vps applier and appended this repository's key to
+`gunbatte-deploy`.
 
 ## Commands
 

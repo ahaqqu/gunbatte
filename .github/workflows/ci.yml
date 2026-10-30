@@ -6,10 +6,10 @@ on:
     # Docs/meta-only changes skip CI entirely — and because deploy fires on CI
     # completion, they never deploy either. Deliberately a denylist: anything
     # NOT listed still runs CI and deploys, so a future path can never
-    # silently stop shipping. Keep in sync with what provision/vps/deploy.sh
-    # actually ships (server binary, viewer bundle, website/, provision/): a
-    # path that changes those belongs OFF this list. YAML anchors are not
-    # supported here — the two lists below are duplicates; edit both.
+    # silently stop shipping. Keep in sync with what deploy.sh actually ships
+    # (gunbatte-server, viewer/dist/, website/): a path that changes those
+    # belongs OFF this list. YAML anchors are not supported here — the two
+    # lists below are duplicates; edit both.
     paths-ignore:
       - 'docs/**'
       - '**/*.md'
@@ -83,3 +83,16 @@ jobs:
       - name: Build viewer
         working-directory: viewer
         run: npm install && npm run build
+
+  # The deploy path's contract is a shell artifact, not Rust, so it gets its
+  # own cheap job: stage a fake tree and assert the tar root, the preserved
+  # state exclusions, the fixed identity/path and the absence of a second
+  # writer. See tests/deploy-contract.sh.
+  deploy-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check deploy artifact contract
+        run: |
+          bash -n deploy.sh tests/deploy-contract.sh
+          bash tests/deploy-contract.sh

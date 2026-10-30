@@ -90,8 +90,13 @@ otherwise a follow-up run of this skill — finish the span:
    checks at all — mergeability is then the whole gate).
 2. **Deploy is part of the task.** Confirm CI is green on main, then
    watch the `deploy` workflow (it fires on CI success via
-   `workflow_run`) until it succeeds — it runs
-   `provision/vps/deploy.sh`: build, rsync, restart `gunbatte.service`.
+   `workflow_run`) until it succeeds — it runs `./deploy.sh`: build,
+   upload the code artifact as `gunbatte-deploy`, then the box's shared
+   `vps-deploy gunbatte` helper restarts `gunbatte.service` and
+   health-checks it. Until the owner has bootstrapped the `ahaqqu/vps`
+   applier and appended this repository's key to `gunbatte-deploy`, the
+   deploy fails closed at the helper — report that as the owner step, not
+   a code failure.
    Docs/meta-only merges (the `paths-ignore` list in ci.yml) start no CI
    run and so fire no deploy — verify by absence in the Actions tab
    instead.

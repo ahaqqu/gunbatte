@@ -160,8 +160,10 @@ office, one home, or one VPS running 15+ bots will hit this no matter what
 the app allows.
 
 - Fix: split the fleet across IPs, or raise the ceilings in
-  `provision/vps/nginx/gunbatte.conf` (edit → `nginx -t` → reload; certbot
-  also edits that file, so re-read it first).
+  [`ahaqqu/vps`](https://github.com/ahaqqu/vps)'s `gunbatte/nginx/gunbatte.conf`.
+  The installed site is certbot-owned, so land a template change through the
+  `gunbatte-nginx-reconcile` helper described in that repository; re-read the
+  installed file first.
 - Legit humans are unaffected: one player needs one connection and rarely
   reconnects.
 
