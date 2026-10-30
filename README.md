@@ -271,16 +271,17 @@ the applier has never run, it fails earlier at `vps-deploy`: the helper loads
 the missing `/etc/vps/deploy/gunbatte.conf` before any deploy step, because the
 same applier transaction installs that contract and the doctor.
 
-The helper, the `gunbatte-deploy` identity and the root-only
-`/etc/gunbatte/proxy.env` are installed by the owner-run
-[`ahaqqu/vps` bootstrap](https://github.com/ahaqqu/vps/blob/main/docs/DEPLOY.md).
-This repository's public key must be appended to `gunbatte-deploy` (see
-[`docs/ACCESS.md`](https://github.com/ahaqqu/vps/blob/main/docs/ACCESS.md)
-and `runbook/BOOTSTRAP.md` §8a) before the first deploy. Until both owner
-steps are done the deploy fails closed before it applies anything: at SSH
-authentication when the key is missing, and at `vps-deploy` when the applier
-has not installed the deploy contract. The doctor gate can only run after a
-successful apply, so it is never the first failure on an unbootstrapped box.
+The helper and the `gunbatte-deploy` identity are installed by the
+[`ahaqqu/vps` bootstrap](https://github.com/ahaqqu/vps/blob/main/runbook/BOOTSTRAP.md)
+(§ 6 Bootstrap, § 7 Verify); § 4 One-time host setup creates the root-only
+`/etc/gunbatte/proxy.env`. That bootstrap is done on this box: the applier,
+the deploy contract and the grant are installed, and this repository's public
+key is on `gunbatte-deploy` (§ 9 Switch one project to its deploy identity), so
+the deploy is live. On a box the applier has never touched, the deploy fails
+closed before it applies anything: at SSH authentication when the key is
+missing, and at `vps-deploy` when the deploy contract is not installed. The
+doctor gate can only run after a successful apply, so it is never the first
+failure there.
 
 CI runs the same `./deploy.sh` after a green `CI` run on `main`, using the
 `VPS_USER` (default `gunbatte-deploy`), `VPS_HOST` and `GUNBATTE_GAME_HOST`
