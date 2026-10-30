@@ -271,10 +271,10 @@ the applier has never run, it fails earlier at `vps-deploy`: the helper loads
 the missing `/etc/vps/deploy/gunbatte.conf` before any deploy step, because the
 same applier transaction installs that contract and the doctor.
 
-The helper, the `gunbatte-deploy` identity and the root-only
-`/etc/gunbatte/proxy.env` are installed by the
+The helper and the `gunbatte-deploy` identity are installed by the
 [`ahaqqu/vps` bootstrap](https://github.com/ahaqqu/vps/blob/main/runbook/BOOTSTRAP.md)
-(§ 6 Bootstrap, § 7 Verify). That bootstrap is done on this box: the applier,
+(§ 6 Bootstrap, § 7 Verify); § 4 One-time host setup creates the root-only
+`/etc/gunbatte/proxy.env`. That bootstrap is done on this box: the applier,
 the deploy contract and the grant are installed, and this repository's public
 key is on `gunbatte-deploy` (§ 9 Switch one project to its deploy identity), so
 the deploy is live. On a box the applier has never touched, the deploy fails
