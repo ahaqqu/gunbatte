@@ -251,13 +251,13 @@ ssh gunbatte-deploy@<host> 'bash /srv/vps-ops/doctor.sh'
 `ahaqqu/vps` applier (its `ops/doctor.sh`): nginx syntax and `sites-enabled/`
 hygiene, failed units, every app's listeners, certificates, public DNS and
 disk. A non-zero exit turns this deploy red — a gunbatte deploy that leaves
-the shared box unhealthy is not a successful deploy. The file is required: if
-the applier has not installed it, `./deploy.sh` fails closed with a message
-naming the missing path instead of reporting a deploy that never ran the
-gate. Because the gate runs after the swap and restart, a doctor failure
-leaves the new tree live and still fails the run; the operator can roll the
-tree back with `sudo -n /usr/local/sbin/vps-deploy gunbatte --rollback` on the
-box or fix the box first.
+the shared box unhealthy is not a successful deploy. The file is required: a
+run that finds it missing fails closed with a message naming the missing path
+instead of reporting a deploy that never ran the gate. Because the gate runs
+after the swap and restart, a doctor failure leaves the new tree live and
+still fails the run; the operator can roll the tree back with
+`sudo -n /usr/local/sbin/vps-deploy gunbatte --rollback` on the box or fix the
+box first.
 
 The shared vps repository already states this contract:
 `gunbatte/sudoers/gunbatte-deploy` grants the sweep's two read-only
@@ -265,16 +265,22 @@ diagnostics (`/usr/sbin/nginx -t`, `/usr/bin/certbot certificates`),
 `ops/README.md` says every app's post-deploy gate runs from `/srv/vps-ops`,
 and `docs/RESOURCES.md` lists `doctor.sh` as run by every deploy gate.
 Gunbatte's deploy depends on the vps applier having installed that one file;
-this repository does not vendor or fetch it. Until the applier has run once on
-a box, gunbatte deploys fail closed at the doctor gate.
+this repository does not vendor or fetch it. If the deploy contract exists but
+the doctor does not, the deploy fails closed at the doctor gate. On a box where
+the applier has never run, it fails earlier at `vps-deploy`: the helper loads
+the missing `/etc/vps/deploy/gunbatte.conf` before any deploy step, because the
+same applier transaction installs that contract and the doctor.
 
 The helper, the `gunbatte-deploy` identity and the root-only
 `/etc/gunbatte/proxy.env` are installed by the owner-run
 [`ahaqqu/vps` bootstrap](https://github.com/ahaqqu/vps/blob/main/docs/DEPLOY.md).
 This repository's public key must be appended to `gunbatte-deploy` (see
 [`docs/ACCESS.md`](https://github.com/ahaqqu/vps/blob/main/docs/ACCESS.md)
-and `runbook/BOOTSTRAP.md` §8a) before the first deploy; until then the deploy
-fails closed at `vps-deploy`.
+and `runbook/BOOTSTRAP.md` §8a) before the first deploy. Until both owner
+steps are done the deploy fails closed before it applies anything: at SSH
+authentication when the key is missing, and at `vps-deploy` when the applier
+has not installed the deploy contract. The doctor gate can only run after a
+successful apply, so it is never the first failure on an unbootstrapped box.
 
 CI runs the same `./deploy.sh` after a green `CI` run on `main`, using the
 `VPS_USER` (default `gunbatte-deploy`), `VPS_HOST` and `GUNBATTE_GAME_HOST`

@@ -9,7 +9,9 @@
 # dotfile, a second writer or a skipped doctor fails in production with no
 # other signal, so this test puts decoys where the script actually copies
 # them, pins the exact root, and drives the upload/apply/doctor path through
-# fake `ssh`/`rsync` binaries.
+# fake `ssh`/`rsync` binaries. It also runs the real build path with stub
+# `make`/`cargo` binaries, so the clean-tree check cannot slip below the build
+# without going red.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -253,15 +255,40 @@ printf '%s\n' "$doctor_cmd" | grep -q 'if \[ -x /srv/vps-ops/doctor.sh \]' ||
     fail "the doctor gate does not check that the file exists"
 printf '%s\n' "$doctor_cmd" | grep -q 'exit 1' ||
     fail "the doctor gate does not fail closed when the file is absent"
-# Execute the literal remote command when the host path is absent here: absence
-# must be a non-zero exit with a message, never a skipped gate.
-if [ ! -e /srv/vps-ops/doctor.sh ]; then
-    if sh -c "$doctor_cmd" >"$tmp/absent-doctor.out" 2>&1; then
-        fail "the doctor command exited 0 with /srv/vps-ops/doctor.sh absent"
-    fi
-    grep -q 'is missing' "$tmp/absent-doctor.out" ||
-        fail "an absent doctor does not name the missing path"
+# Execute the literal remote command under a relocated root so absence and
+# presence are simulated here instead of depending on this host: the check
+# must run everywhere, including a box where the real path exists.
+doctor_root="$tmp/remote-doctor"
+doctor_at_root="${doctor_cmd//\/srv\/vps-ops/$doctor_root}"
+[ "$doctor_at_root" != "$doctor_cmd" ] ||
+    fail "the doctor command does not hard-code /srv/vps-ops/doctor.sh"
+if printf '%s\n' "$doctor_at_root" | grep -qF '/srv/vps-ops'; then
+    fail "the relocated doctor command still points at the host path"
 fi
+
+# Absent: non-zero and a message naming the missing path, never a skipped gate.
+if sh -c "$doctor_at_root" >"$tmp/absent-doctor.out" 2>&1; then
+    fail "the doctor command exited 0 with its path absent"
+fi
+grep -q 'is missing' "$tmp/absent-doctor.out" ||
+    fail "an absent doctor does not say it is missing"
+grep -qF "$doctor_root/doctor.sh" "$tmp/absent-doctor.out" ||
+    fail "an absent doctor does not name the missing path"
+
+# Present: the command runs the doctor and propagates its exit status.
+mkdir -p "$doctor_root"
+printf '#!/bin/sh\nexit 0\n' >"$doctor_root/doctor.sh"
+chmod 755 "$doctor_root/doctor.sh"
+if ! sh -c "$doctor_at_root" >"$tmp/present-doctor.out" 2>&1; then
+    fail "the doctor command failed with an executable doctor present"
+fi
+printf '#!/bin/sh\nexit 7\n' >"$doctor_root/doctor.sh"
+chmod 755 "$doctor_root/doctor.sh"
+if sh -c "$doctor_at_root" >"$tmp/failing-doctor.out" 2>&1; then
+    fail "the doctor command swallowed a failing doctor"
+fi
+ok "post-deploy doctor gate is the second SSH call, runs the doctor when present and fails closed when absent"
+
 live_entries="$(tar -tzf "$tmp/live.tar.gz" | sed 's|^\./||')"
 live_top="$(printf '%s\n' "$live_entries" | sed '/^$/d' | cut -d/ -f1 | sort -u | tr '\n' ' ')"
 live_top="${live_top% }"
@@ -270,7 +297,7 @@ live_top="${live_top% }"
 if printf '%s\n' "$live_entries" | grep -Eq '(^|/)(docs|target|replays|provision|\.git)(/|$)'; then
     fail "full-deploy artifact leaked a repo tree that is present in the checkout"
 fi
-ok "post-deploy doctor gate runs after vps-deploy and is fail-closed when absent"
+ok "full-deploy artifact keeps the exact contract root and drops repo trees"
 
 : >"$tmp/ssh.log"
 if FAKE_DOCTOR_EXIT=1 run_deploy "$live" "$tmp/doctor-fail.tar.gz" \
@@ -318,6 +345,69 @@ fi
 grep -q 'not a git checkout' "$tmp/plain.out" ||
     fail "a non-git checkout did not fail closed"
 ok "a non-git checkout fails closed instead of skipping the clean check"
+
+# --- the clean-tree check runs before the build ------------------------------
+# Every deploy above passes --skip-build, so moving the clean-tree guard below
+# the build would stay green. Drive the real build path with stub make/cargo
+# binaries: a dirty checkout must fail before either one runs, and a clean one
+# must build viewer then the release binary.
+
+mkdir -p "$tmp/buildbin"
+write_build_stub() { # <tool>; records the call and dirties a tracked path
+    cat >"$tmp/buildbin/$1" <<EOF
+#!/bin/sh
+printf '%s %s\n' "$1" "\$*" >>"\${BUILD_LOG:?BUILD_LOG is required}"
+printf 'build churn\n' >>"\$PWD/docs/index.html"
+exit 0
+EOF
+    chmod +x "$tmp/buildbin/$1"
+}
+write_build_stub make
+write_build_stub cargo
+
+run_deploy_build() { # <repo> <archive>; real build path, stub make/cargo
+    PATH="$tmp/buildbin:$tmp/bin:$PATH" \
+        BUILD_LOG="$tmp/build.log" \
+        SSH_LOG="$tmp/ssh.log" \
+        VPS_USER=gunbatte-deploy \
+        VPS_HOST=box.example.test \
+        GUNBATTE_GAME_HOST=play.example.test \
+        "$repo/deploy.sh" --repo "$1" --out "$2"
+}
+
+dirty_build="$tmp/dirty-build"
+cp -a "$live" "$dirty_build"
+printf 'scratch\n' >"$dirty_build/website/notes.txt"
+: >"$tmp/build.log"
+: >"$tmp/ssh.log"
+if run_deploy_build "$dirty_build" "$tmp/dirty-build.tar.gz" >"$tmp/dirty-build.out" 2>&1; then
+    fail "a dirty checkout deployed on the real build path"
+fi
+grep -q 'source tree is dirty' "$tmp/dirty-build.out" ||
+    fail "a dirty checkout did not fail before the build"
+[ ! -s "$tmp/build.log" ] ||
+    fail "the build ran before the clean-tree check: $(tr '\n' ';' <"$tmp/build.log")"
+[ "$(grep -c . "$tmp/ssh.log")" -eq 0 ] ||
+    fail "a dirty checkout reached upload/apply on the real build path"
+ok "a dirty checkout fails the clean-tree check before the build runs"
+
+clean_build="$tmp/clean-build"
+cp -a "$live" "$clean_build"
+: >"$tmp/build.log"
+: >"$tmp/ssh.log"
+if ! run_deploy_build "$clean_build" "$tmp/clean-build.tar.gz" >"$tmp/clean-build.out" 2>&1; then
+    cat "$tmp/clean-build.out" >&2
+    fail "a clean checkout did not deploy on the real build path"
+fi
+[ "$(sed -n '1p' "$tmp/build.log")" = "make viewer" ] ||
+    fail "the real build path did not run 'make viewer' first"
+[ "$(sed -n '2p' "$tmp/build.log")" = "cargo build --release -p gunbatte-server" ] ||
+    fail "the real build path did not run the release build second"
+[ "$(grep -c . "$tmp/build.log")" -eq 2 ] ||
+    fail "the real build path ran unexpected build commands: $(tr '\n' ';' <"$tmp/build.log")"
+[ "$(grep -c . "$tmp/ssh.log")" -eq 2 ] ||
+    fail "a clean built deploy did not apply and run the doctor"
+ok "the real build path builds viewer then gunbatte-server and deploys"
 
 # --- the script's fixed identity/path/command -------------------------------
 
