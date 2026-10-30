@@ -92,9 +92,11 @@ systemd, sudoers, TLS, deploy contract), read that repository's
 belongs there, not here. This repository builds and uploads the code
 artifact, applies it through `vps-deploy gunbatte`, then runs the shared
 `/srv/vps-ops/doctor.sh` gate; a non-zero sweep or a missing doctor fails the
-deploy. Never add a second writer (bootstrap/apply path) here: the deploy
-fails closed until the owner has bootstrapped the vps applier and appended
-this repository's key to `gunbatte-deploy`.
+deploy. Never add a second writer (bootstrap/apply path) here. The bootstrap is
+done and this repository's key is on `gunbatte-deploy`; deploy only through
+`sudo -n /usr/local/sbin/vps-deploy gunbatte`. That identity also has bounded
+`start|stop|restart|status` for `gunbatte.service`; timers are refused and a raw
+`systemctl` grant is a regression.
 
 ## Commands
 
