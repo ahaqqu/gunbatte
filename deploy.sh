@@ -153,6 +153,19 @@ if [ "$PACKAGE_ONLY" -ne 1 ]; then
     VPS_HOST="$(from_env_or_gh VPS_HOST "")"
     [ -n "$VPS_HOST" ] ||
         die "VPS_HOST is not set — export it or add it as a GitHub repository variable (Settings → Secrets and variables → Actions → Variables)"
+
+    # Validate the checkout before spending a build on it. A deploy ships only
+    # a committed tree: an untracked path is how a local .env, scratch replay
+    # or host config reaches a world-readable upload. Build outputs are
+    # gitignored, so they do not make the tree dirty.
+    if ! git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        die "cannot verify a clean source tree: $REPO is not a git checkout. Deploy from a committed checkout (build outputs are gitignored), or use --package-only and upload deliberately."
+    fi
+    dirty="$(git -C "$REPO" status --porcelain --untracked-files=all)"
+    if [ -n "$dirty" ]; then
+        printf '%s\n' "$dirty" >&2
+        die "source tree is dirty — commit or remove the paths above before deploying; a deploy ships only a clean checkout"
+    fi
 fi
 
 if [ "$SKIP_BUILD" -ne 1 ]; then
@@ -237,18 +250,6 @@ if [ "$PACKAGE_ONLY" -eq 1 ]; then
     archive_is_temp=0
     echo "✓ packaged $archive"
     exit 0
-fi
-
-# A deploy ships only a committed tree: an untracked path is how a local
-# .env, scratch replay or host config reaches a world-readable upload. Build
-# outputs are gitignored, so they do not make the tree dirty.
-if ! git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    die "cannot verify a clean source tree: $REPO is not a git checkout. Deploy from a committed checkout (build outputs are gitignored), or use --package-only and upload deliberately."
-fi
-dirty="$(git -C "$REPO" status --porcelain --untracked-files=all)"
-if [ -n "$dirty" ]; then
-    printf '%s\n' "$dirty" >&2
-    die "source tree is dirty — commit or remove the paths above before deploying; a deploy ships only a clean checkout"
 fi
 
 SSH_OPTS=(-o ServerAliveInterval=15 -o ServerAliveCountMax=12 -o ConnectTimeout=20)
