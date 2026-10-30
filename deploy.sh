@@ -15,8 +15,15 @@
 # `sudo -n /usr/local/sbin/vps-deploy gunbatte`. The helper preserves
 # ladder.db and replays/ across the swap, publishes website/ to the
 # world-readable web root, restarts gunbatte.service and health-checks
-# /ladder. This script never writes the target tree, never touches state and
-# never restarts the unit directly.
+# /ladder. Only after that succeeds does this script run the box-wide
+# post-deploy gate, /srv/vps-ops/doctor.sh, as the deploy identity: a
+# non-zero sweep reds the deploy, and a missing doctor fails closed. This
+# script never writes the target tree, never touches state and never
+# restarts the unit directly.
+#
+# A deploy ships only a committed, clean checkout: untracked or modified
+# paths fail before upload, and the artifact assertion rejects hidden path
+# segments (a stray website/.env must never become world-readable).
 #
 # There is no --bootstrap path here. The one-time host bootstrap (applier,
 # deploy identities, /etc/gunbatte/proxy.env, the key append) is an owner
@@ -57,8 +64,10 @@ usage: ./deploy.sh [--package-only] [--skip-build] [--out FILE] [--repo DIR]
 
 Builds the GUNBATTE ROYALE code artifact (gunbatte-server, viewer/dist/,
 website/), uploads it as gunbatte-deploy to
-/srv/vps-incoming/gunbatte.tar.gz, and runs the box's shared
-`sudo -n /usr/local/sbin/vps-deploy gunbatte` helper.
+/srv/vps-incoming/gunbatte.tar.gz, runs the box's shared
+`sudo -n /usr/local/sbin/vps-deploy gunbatte` helper, and then runs the
+shared post-deploy doctor gate (/srv/vps-ops/doctor.sh) as the deploy
+identity. A missing or failing doctor fails the deploy.
 
 Options:
   --package-only  build and tar the artifact; do not upload or deploy
@@ -186,12 +195,10 @@ find "$stage/website" -type f -name '*.html' -print0 |
         mv "$page.tmp" "$page"
     done
 
-# State and host configuration must never ride along in a code artifact.
-for forbidden in ladder.db replays provision; do
-    if [ -e "$stage/$forbidden" ]; then
-        die "refusing to package state or host configuration: $forbidden"
-    fi
-done
+# State and host configuration must never ride along in a code artifact. The
+# tar assertion below is the single enforcement point: only the three
+# contract paths are staged, so the check reads the artifact that would ship
+# rather than a staging tree that only mirrors what was just copied.
 
 if [ -n "$OUT" ]; then
     archive="$OUT"
@@ -203,15 +210,23 @@ fi
 
 tar -czf "$archive" -C "$stage" .
 
-# Assert the artifact before it leaves the machine: relative paths only, the
-# three contract paths present, state and host configuration absent.
+# Assert the artifact before it leaves the machine: the exact contract root,
+# relative paths only, no hidden path segment (a dotfile would publish
+# world-readable), and no state or host configuration.
 entries="$(tar -tzf "$archive" | sed 's|^\./||')"
 for required in gunbatte-server viewer/dist/index.html website/index.html; do
     printf '%s\n' "$entries" | grep -qxF "$required" ||
         die "artifact is missing $required"
 done
+top="$(printf '%s\n' "$entries" | sed '/^$/d' | cut -d/ -f1 | sort -u | tr '\n' ' ')"
+top="${top% }"
+[ "$top" = "gunbatte-server viewer website" ] ||
+    die "artifact root must be exactly gunbatte-server, viewer and website; got: ${top:-<empty>}"
 if printf '%s\n' "$entries" | grep -Eq '^/|(^|/)\.\.(/|$)'; then
     die "artifact contains an absolute or parent-relative path"
+fi
+if printf '%s\n' "$entries" | grep -Eq '(^|/)\.'; then
+    die "artifact contains a hidden path segment (dotfile or dot-directory): $(printf '%s\n' "$entries" | grep -E '(^|/)\.' | head -n 3 | tr '\n' ' ')"
 fi
 if printf '%s\n' "$entries" | grep -Eq '(^|/)(ladder\.db|replays|provision|target|\.git)(/|$)'; then
     die "artifact contains state or host configuration (ladder.db, replays, provision, target or .git)"
@@ -222,6 +237,18 @@ if [ "$PACKAGE_ONLY" -eq 1 ]; then
     archive_is_temp=0
     echo "✓ packaged $archive"
     exit 0
+fi
+
+# A deploy ships only a committed tree: an untracked path is how a local
+# .env, scratch replay or host config reaches a world-readable upload. Build
+# outputs are gitignored, so they do not make the tree dirty.
+if ! git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    die "cannot verify a clean source tree: $REPO is not a git checkout. Deploy from a committed checkout (build outputs are gitignored), or use --package-only and upload deliberately."
+fi
+dirty="$(git -C "$REPO" status --porcelain --untracked-files=all)"
+if [ -n "$dirty" ]; then
+    printf '%s\n' "$dirty" >&2
+    die "source tree is dirty — commit or remove the paths above before deploying; a deploy ships only a clean checkout"
 fi
 
 SSH_OPTS=(-o ServerAliveInterval=15 -o ServerAliveCountMax=12 -o ConnectTimeout=20)
@@ -237,4 +264,13 @@ if ! ssh "${SSH_OPTS[@]}" "$VPS_USER@$VPS_HOST" 'sudo -n /usr/local/sbin/vps-dep
     die "vps-deploy $APP rejected the deploy; the box kept the previous tree and its preserved state. If this is the first run, the owner must bootstrap ahaqqu/vps and append this repository's key to $VPS_USER (ahaqqu/vps docs/ACCESS.md, runbook/BOOTSTRAP.md §8a)."
 fi
 
-echo "✔ deployed $APP through $VPS_USER@$VPS_HOST"
+# The shared-box gate: whichever deploy breaks nginx, a unit, a certificate or
+# DNS turns its own run red. The sweep is installed by the ahaqqu/vps applier
+# (ops/doctor.sh) and the gunbatte-deploy grant carries its two read-only
+# diagnostics; a missing file is a broken host contract, not a warning.
+echo "▶ post-deploy doctor: /srv/vps-ops/doctor.sh (shared-box gate)…"
+if ! ssh "${SSH_OPTS[@]}" "$VPS_USER@$VPS_HOST" 'if [ -x /srv/vps-ops/doctor.sh ]; then bash /srv/vps-ops/doctor.sh; else echo "!! /srv/vps-ops/doctor.sh is missing — the ahaqqu/vps applier installs the shared post-deploy gate (ops/doctor.sh); this deploy cannot claim success without it" >&2; exit 1; fi'; then
+    die "post-deploy doctor gate failed — the box is unhealthy or /srv/vps-ops/doctor.sh is missing. $APP was applied, but the run is red: fix the box before the next deploy."
+fi
+
+echo "✔ deployed $APP through $VPS_USER@$VPS_HOST and the shared doctor gate"

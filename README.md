@@ -209,8 +209,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Host configuration lives in [`ahaqqu/vps`](https://github.com/ahaqqu/vps)
 under `gunbatte/`: the `gunbatte.service` unit, the nginx site, the deploy
-identity's sudoers grant and the deploy contract. This repository only builds
-and ships the code tree; it has no bootstrap, nginx or direct `systemctl` path.
+identity's sudoers grant and the deploy contract. This repository builds and
+ships the code tree; it has no bootstrap, nginx or direct `systemctl` path.
 
 `./deploy.sh` builds the release binary and viewer, then uploads an artifact
 whose root is exactly:
@@ -221,8 +221,15 @@ viewer/dist/
 website/
 ```
 
-as `gunbatte-deploy@<host>:/srv/vps-incoming/gunbatte.tar.gz`, and runs the
-box's shared helper:
+as `gunbatte-deploy@<host>:/srv/vps-incoming/gunbatte.tar.gz`. The artifact is
+asserted before any upload: its root must be exactly those three paths, no
+hidden path segment (dotfile or dot-directory) may appear — a stray
+`website/.env` would otherwise be published world-readable — and `ladder.db`,
+`replays/`, `provision/`, `target/` and `.git/` are rejected. A real deploy
+also requires a committed, clean checkout: untracked or modified paths fail
+before upload (build outputs are gitignored).
+
+Then it runs the box's shared helper:
 
 ```sh
 ssh gunbatte-deploy@<host> 'sudo -n /usr/local/sbin/vps-deploy gunbatte'
@@ -230,8 +237,36 @@ ssh gunbatte-deploy@<host> 'sudo -n /usr/local/sbin/vps-deploy gunbatte'
 
 The helper moves the current tree aside, carries `ladder.db` and `replays/`
 across the swap (state is preserved), publishes `website/` to the nginx web
-root, restarts `gunbatte.service` and health-checks `/ladder`. A failed deploy
-leaves the previous tree and its state in place.
+root, restarts `gunbatte.service` and health-checks `/ladder`. A helper
+failure leaves the previous tree and its state in place.
+
+After a successful apply, `./deploy.sh` runs the shared post-deploy gate as
+the same identity:
+
+```sh
+ssh gunbatte-deploy@<host> 'bash /srv/vps-ops/doctor.sh'
+```
+
+`/srv/vps-ops/doctor.sh` is the box-wide read-only sweep installed by the
+`ahaqqu/vps` applier (its `ops/doctor.sh`): nginx syntax and `sites-enabled/`
+hygiene, failed units, every app's listeners, certificates, public DNS and
+disk. A non-zero exit turns this deploy red — a gunbatte deploy that leaves
+the shared box unhealthy is not a successful deploy. The file is required: if
+the applier has not installed it, `./deploy.sh` fails closed with a message
+naming the missing path instead of reporting a deploy that never ran the
+gate. Because the gate runs after the swap and restart, a doctor failure
+leaves the new tree live and still fails the run; the operator can roll the
+tree back with `sudo -n /usr/local/sbin/vps-deploy gunbatte --rollback` on the
+box or fix the box first.
+
+The shared vps repository already states this contract:
+`gunbatte/sudoers/gunbatte-deploy` grants the sweep's two read-only
+diagnostics (`/usr/sbin/nginx -t`, `/usr/bin/certbot certificates`),
+`ops/README.md` says every app's post-deploy gate runs from `/srv/vps-ops`,
+and `docs/RESOURCES.md` lists `doctor.sh` as run by every deploy gate.
+Gunbatte's deploy depends on the vps applier having installed that one file;
+this repository does not vendor or fetch it. Until the applier has run once on
+a box, gunbatte deploys fail closed at the doctor gate.
 
 The helper, the `gunbatte-deploy` identity and the root-only
 `/etc/gunbatte/proxy.env` are installed by the owner-run

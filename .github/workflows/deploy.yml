@@ -2,11 +2,12 @@
 #
 # Fires AFTER the CI workflow finishes green on main (or on a manual dispatch),
 # then runs the exact same ./deploy.sh a human would: build viewer + server,
-# upload the code artifact as `gunbatte-deploy`, and run the box's shared
-# `vps-deploy gunbatte` helper. Host configuration (the unit, nginx site,
-# sudoers grant and deploy contract) lives in ahaqqu/vps and is installed by
-# its owner-run bootstrap; this workflow has no bootstrap, nginx or systemd
-# step.
+# upload the code artifact as `gunbatte-deploy`, run the box's shared
+# `vps-deploy gunbatte` helper, then run the shared post-deploy doctor gate
+# (/srv/vps-ops/doctor.sh) as the deploy identity. Host configuration (the
+# unit, nginx site, sudoers grant and deploy contract) lives in ahaqqu/vps and
+# is installed by its owner-run bootstrap; this workflow has no bootstrap,
+# nginx or systemd step.
 #
 # Docs/meta-only changes never get here: ci.yml's paths-ignore skips CI for
 # them, and without a completed CI run this workflow cannot fire. Manual
@@ -91,5 +92,5 @@ jobs:
           EOF
           chmod 600 ~/.ssh/config
 
-      - name: Deploy (build + upload + vps-deploy)
+      - name: Deploy (build + upload + vps-deploy + doctor)
         run: ./deploy.sh

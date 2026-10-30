@@ -89,11 +89,12 @@ The box behind `*.ahaqqu.com` is shared, and its single source of truth is
 files. Before writing anything that changes VPS configuration (nginx,
 systemd, sudoers, TLS, deploy contract), read that repository's
 `docs/DEPLOY.md`, `docs/ACCESS.md` and the app's directory; host config
-belongs there, not here. This repository only builds and uploads the code
-artifact through `vps-deploy gunbatte`. Never add a second writer
-(bootstrap/apply path) here: the deploy fails closed until the owner has
-bootstrapped the vps applier and appended this repository's key to
-`gunbatte-deploy`.
+belongs there, not here. This repository builds and uploads the code
+artifact, applies it through `vps-deploy gunbatte`, then runs the shared
+`/srv/vps-ops/doctor.sh` gate; a non-zero sweep or a missing doctor fails the
+deploy. Never add a second writer (bootstrap/apply path) here: the deploy
+fails closed until the owner has bootstrapped the vps applier and appended
+this repository's key to `gunbatte-deploy`.
 
 ## Commands
 
