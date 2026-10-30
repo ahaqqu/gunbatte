@@ -159,9 +159,23 @@ connections per IP, and ~10 handshakes per minute per IP (burst 20). One
 office, one home, or one VPS running 15+ bots will hit this no matter what
 the app allows.
 
-- Fix: split the fleet across IPs, or raise the ceilings in
-  `provision/vps/nginx/gunbatte.conf` (edit → `nginx -t` → reload; certbot
-  also edits that file, so re-read it first).
+- Fix: split the fleet across IPs, or raise the ceilings deliberately in two
+  places. The values live in
+  [`ahaqqu/vps`](https://github.com/ahaqqu/vps)'s
+  `gunbatte/nginx/gunbatte.conf` (the template for future installs) and in
+  `/etc/nginx/sites-available/gunbatte.conf` (the certbot-edited file nginx
+  actually reads, linked from `/etc/nginx/sites-enabled/gunbatte.conf`).
+  Because the installed file is never re-rendered from the template, edit it
+  directly: back it up, raise `limit_conn gunbatte_ws_conn` in both
+  `location = /ws/bot` and `location = /ws/spectate`, raise
+  `limit_req zone=gunbatte_ws_open burst=…` (and the `rate=…` in its
+  `limit_req_zone` if handshake rate is the ceiling), then run `nginx -t` and
+  `systemctl reload nginx`; land the same values in the template.
+  `gunbatte-nginx-reconcile` (`/usr/local/sbin/gunbatte-nginx-reconcile`,
+  ahaqqu/vps `gunbatte/nginx/reconcile-limits.sh`) is **add-only**: it
+  inserts missing blocks at its hardcoded values and reports "nothing to
+  reconcile" when they already exist, so it can never raise an installed
+  ceiling.
 - Legit humans are unaffected: one player needs one connection and rarely
   reconnects.
 

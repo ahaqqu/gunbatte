@@ -205,6 +205,88 @@ make viewer                # rebuild wasm + viewer into viewer/dist
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
+## Deploying
+
+Host configuration lives in [`ahaqqu/vps`](https://github.com/ahaqqu/vps)
+under `gunbatte/`: the `gunbatte.service` unit, the nginx site, the deploy
+identity's sudoers grant and the deploy contract. This repository builds and
+ships the code tree; it has no bootstrap, nginx or direct `systemctl` path.
+
+`./deploy.sh` builds the release binary and viewer, then uploads an artifact
+whose root is exactly:
+
+```
+gunbatte-server
+viewer/dist/
+website/
+```
+
+as `gunbatte-deploy@<host>:/srv/vps-incoming/gunbatte.tar.gz`. The artifact is
+asserted before any upload: its root must be exactly those three paths, no
+hidden path segment (dotfile or dot-directory) may appear — a stray
+`website/.env` would otherwise be published world-readable — and `ladder.db`,
+`replays/`, `provision/`, `target/` and `.git/` are rejected. A real deploy
+also requires a committed, clean checkout: untracked or modified paths fail
+before upload (build outputs are gitignored).
+
+Then it runs the box's shared helper:
+
+```sh
+ssh gunbatte-deploy@<host> 'sudo -n /usr/local/sbin/vps-deploy gunbatte'
+```
+
+The helper moves the current tree aside, carries `ladder.db` and `replays/`
+across the swap (state is preserved), publishes `website/` to the nginx web
+root, restarts `gunbatte.service` and health-checks `/ladder`. A helper
+failure leaves the previous tree and its state in place.
+
+After a successful apply, `./deploy.sh` runs the shared post-deploy gate as
+the same identity:
+
+```sh
+ssh gunbatte-deploy@<host> 'bash /srv/vps-ops/doctor.sh'
+```
+
+`/srv/vps-ops/doctor.sh` is the box-wide read-only sweep installed by the
+`ahaqqu/vps` applier (its `ops/doctor.sh`): nginx syntax and `sites-enabled/`
+hygiene, failed units, every app's listeners, certificates, public DNS and
+disk. A non-zero exit turns this deploy red — a gunbatte deploy that leaves
+the shared box unhealthy is not a successful deploy. The file is required: a
+run that finds it missing fails closed with a message naming the missing path
+instead of reporting a deploy that never ran the gate. Because the gate runs
+after the swap and restart, a doctor failure leaves the new tree live and
+still fails the run; the operator can roll the tree back with
+`sudo -n /usr/local/sbin/vps-deploy gunbatte --rollback` on the box or fix the
+box first.
+
+The shared vps repository already states this contract:
+`gunbatte/sudoers/gunbatte-deploy` grants the sweep's two read-only
+diagnostics (`/usr/sbin/nginx -t`, `/usr/bin/certbot certificates`),
+`ops/README.md` says every app's post-deploy gate runs from `/srv/vps-ops`,
+and `docs/RESOURCES.md` lists `doctor.sh` as run by every deploy gate.
+Gunbatte's deploy depends on the vps applier having installed that one file;
+this repository does not vendor or fetch it. If the deploy contract exists but
+the doctor does not, the deploy fails closed at the doctor gate. On a box where
+the applier has never run, it fails earlier at `vps-deploy`: the helper loads
+the missing `/etc/vps/deploy/gunbatte.conf` before any deploy step, because the
+same applier transaction installs that contract and the doctor.
+
+The helper, the `gunbatte-deploy` identity and the root-only
+`/etc/gunbatte/proxy.env` are installed by the owner-run
+[`ahaqqu/vps` bootstrap](https://github.com/ahaqqu/vps/blob/main/docs/DEPLOY.md).
+This repository's public key must be appended to `gunbatte-deploy` (see
+[`docs/ACCESS.md`](https://github.com/ahaqqu/vps/blob/main/docs/ACCESS.md)
+and `runbook/BOOTSTRAP.md` §8a) before the first deploy. Until both owner
+steps are done the deploy fails closed before it applies anything: at SSH
+authentication when the key is missing, and at `vps-deploy` when the applier
+has not installed the deploy contract. The doctor gate can only run after a
+successful apply, so it is never the first failure on an unbootstrapped box.
+
+CI runs the same `./deploy.sh` after a green `CI` run on `main`, using the
+`VPS_USER` (default `gunbatte-deploy`), `VPS_HOST` and `GUNBATTE_GAME_HOST`
+repository variables and the existing `VPS_DEPLOY_SSH_KEY` /
+`VPS_KNOWN_HOSTS` secrets.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

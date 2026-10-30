@@ -1,24 +1,26 @@
 # Deploy — push-to-deploy for the game + website.
 #
 # Fires AFTER the CI workflow finishes green on main (or on a manual dispatch),
-# then runs the exact same provision/vps/deploy.sh a human would: build viewer
-# + server, rsync to the VPS, restart gunbatte.service. One deploy path for
-# CI and humans.
+# then runs the exact same ./deploy.sh a human would: build viewer + server,
+# upload the code artifact as `gunbatte-deploy`, run the box's shared
+# `vps-deploy gunbatte` helper, then run the shared post-deploy doctor gate
+# (/srv/vps-ops/doctor.sh) as the deploy identity. Host configuration (the
+# unit, nginx site, sudoers grant and deploy contract) lives in ahaqqu/vps and
+# is installed by its owner-run bootstrap; this workflow has no bootstrap,
+# nginx or systemd step.
 #
 # Docs/meta-only changes never get here: ci.yml's paths-ignore skips CI for
 # them, and without a completed CI run this workflow cannot fire. Manual
 # workflow_dispatch stays unconditional — explicit human intent always deploys.
 #
-# ALL configuration comes from repository VARIABLES (Settings → Secrets and
+# Configuration comes from repository VARIABLES (Settings → Secrets and
 # variables → Actions → Variables — nothing is hardcoded in this file):
-#   VPS_USER            the restricted deploy identity (e.g. kajianq-deploy)
+#   VPS_USER            deploy identity (default: gunbatte-deploy)
 #   VPS_HOST            the VPS address (e.g. 62.83.35.220)
 #   GUNBATTE_GAME_HOST  game hostname (e.g. play.gunbatte.ahaqqu.com)
-# and these SECRETS:
+# and these SECRETS (unchanged):
 #   VPS_DEPLOY_SSH_KEY  private half of the deploy identity's key
 #   VPS_KNOWN_HOSTS     ssh-keyscan of VPS_HOST
-# One-time bootstrap (creates the identity, unit, nginx, TLS) is run by a
-# human: ./provision/vps/deploy.sh --bootstrap — see provision/vps/README.md.
 name: deploy
 
 on:
@@ -37,27 +39,22 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     env:
-      VPS_USER: ${{ vars.VPS_USER }}
-      GUNBATTE_DEPLOY_USER: ${{ vars.VPS_USER }}
+      VPS_USER: ${{ vars.VPS_USER || 'gunbatte-deploy' }}
       VPS_HOST: ${{ vars.VPS_HOST }}
-      GUNBATTE_SSH: ${{ vars.VPS_USER }}@${{ vars.VPS_HOST }}
       GUNBATTE_GAME_HOST: ${{ vars.GUNBATTE_GAME_HOST }}
-      GUNBATTE_PORT: ${{ vars.GUNBATTE_PORT }}
-      GUNBATTE_WEB_ROOT: ${{ vars.GUNBATTE_WEB_ROOT }}
-      GUNBATTE_SITE_HOST: ${{ vars.GUNBATTE_SITE_HOST }}
-      GUNBATTE_EMAIL: ${{ vars.GUNBATTE_EMAIL }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Check required variables
-        # Keep this list in sync with the `fetch` calls in deploy.sh — a
-        # variable the script reads but this job does not export fails with
-        # a clear message here instead of mid-deploy.
+        # Keep this list in sync with the values deploy.sh reads: a variable
+        # the script needs but this job does not export fails with a clear
+        # message here instead of mid-deploy. VPS_USER is optional because
+        # deploy.sh defaults it to gunbatte-deploy.
         run: |
           missing=0
-          for v in VPS_USER VPS_HOST GUNBATTE_GAME_HOST GUNBATTE_PORT GUNBATTE_WEB_ROOT; do
+          for v in VPS_HOST GUNBATTE_GAME_HOST; do
             if [ -z "$(printenv "$v")" ]; then
               echo "::error::Repository variable '$v' is not set — add it under Settings → Secrets and variables → Actions → Variables"
               missing=1
@@ -95,5 +92,5 @@ jobs:
           EOF
           chmod 600 ~/.ssh/config
 
-      - name: Deploy (build + upload + restart)
-        run: ./provision/vps/deploy.sh
+      - name: Deploy (build + upload + vps-deploy + doctor)
+        run: ./deploy.sh

@@ -465,8 +465,10 @@ impl Server {
         // Issue #38: cross-site WebSocket hijacking. Browsers announce which
         // page opened the socket; a hostile page in another tab must not be
         // able to open the bot or spectate sockets in a player's name. The
-        // allowlist comes from the environment (apply.sh renders the game
-        // host into the unit); unset = check disabled (local dev, tests).
+        // allowlist comes from the environment (the host unit, rendered by
+        // the ahaqqu/vps applier from /etc/gunbatte/proxy.env, sets
+        // GUNBATTE_ALLOWED_ORIGINS); unset = check disabled (local dev,
+        // tests).
         // Clients with NO Origin header — homemade bots and scripts — are
         // never browsers and always allowed.
         let allowed_origins = std::env::var("GUNBATTE_ALLOWED_ORIGINS")

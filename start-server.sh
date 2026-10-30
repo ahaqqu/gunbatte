@@ -11,8 +11,8 @@
 # (SIGTERM, then SIGKILL after 10s), then the new one starts — so a stale
 # server no longer makes the new one die with "address already in use".
 #
-# The VPS runs the server under systemd; use `systemctl restart gunbatte` there
-# rather than this script.
+# The VPS runs the server under systemd; deploys go through the shared
+# `vps-deploy gunbatte` helper rather than this script.
 #
 # Endpoints once up:
 #   http://127.0.0.1:$PORT/          viewer (watch replays / PLAY LIVE)
